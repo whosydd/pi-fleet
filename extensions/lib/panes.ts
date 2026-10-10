@@ -92,8 +92,8 @@ export function agentName(ticket: string, nonce: string): string {
 }
 
 /** `herdr agent start` argv. Model overrides go after `--`, which the executor parses itself. */
-export function agentStartArgv(name: string, kind: ExecutorKind, paneId: string, model?: string): string[] {
-	const argv = ["agent", "start", name, "--kind", kind, "--pane", paneId];
+export function agentStartArgv(name: string, kind: ExecutorKind, paneId: string, model?: string, startTimeoutMs = 90_000): string[] {
+	const argv = ["agent", "start", name, "--kind", kind, "--pane", paneId, "--timeout", String(startTimeoutMs)];
 	if (model) argv.push("--", kind === "codex" ? "-m" : "--model", model);
 	return argv;
 }

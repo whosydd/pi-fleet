@@ -22,6 +22,7 @@ function settingsFor(dir: string): FleetSettings {
 		gitGuard: true,
 		paneMode: "off",
 		herdrBin: "herdr",
+		agentStartMs: 90_000,
 		notify: true,
 	};
 }

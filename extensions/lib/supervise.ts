@@ -40,6 +40,11 @@ import type { FleetSettings, JobMeta } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 
+/** Headroom over the agent's own startup wait, so pi never kills herdr mid-wait. */
+const START_GRACE_MS = 20_000;
+/** Headroom for a prompt submit, which only writes into an existing pane. */
+const PROMPT_GRACE_MS = 10_000;
+
 export type HarvestOutcome =
 	| { kind: "running" }
 	| { kind: "complete"; meta: JobMeta }
@@ -50,8 +55,7 @@ export interface HarvestReport {
 	outcome: HarvestOutcome;
 }
 
-/** The nonce a job id ends with, reused as the agent-name suffix. */
-function nonceOf(id: string): string {
+/** The nonce a job id ends with, reused as the agent-name suffix. */function nonceOf(id: string): string {
 	const tail = id.split("_").at(-1) ?? "";
 	return tail.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -208,18 +212,24 @@ export class Supervisor {
 		const where = await this.#jobPane(plan.worktree, workspaceId, label);
 		if (!where.ok) return { ok: false, error: where.error };
 		const name = agentName(plan.ticket, nonceOf(plan.id));
-		const started = await this.#herdr(agentStartArgv(name, plan.executor, where.paneId, plan.model));
-		if (!started.ok) return { ok: false, error: started.error };
+		const started = await this.#herdr(agentStartArgv(name, plan.executor, where.paneId, plan.model), START_GRACE_MS + this.settings.agentStartMs);
+		if (!started.ok) {
+			// No agent came up. If this job opened the tab, close it: an idle shell
+			// with no executor in it is litter. A tab that already hosted other jobs
+			// is left alone, because closing it would kill their panes too.
+			if (where.createdTab) void this.#herdr(["tab", "close", where.tabId]);
+			return { ok: false, error: started.error };
+		}
 		const task = buildAgentPrompt(
 			{ ticket: plan.ticket, worktree: plan.worktree, executor: plan.executor, taskKind: plan.taskKind, brief: plan.brief ?? plan.prompt, base: plan.base, skillPointer: plan.skillPointer, model: plan.model, fixRound: plan.fixRound },
 			plan.paths.promptPath,
 			plan.paths.resultPath,
 		);
-		const sent = await this.#herdr(agentPromptArgv(name, task));
+		const sent = await this.#herdr(agentPromptArgv(name, task), PROMPT_GRACE_MS + this.settings.agentStartMs);
 		if (!sent.ok) {
 			// The agent is up but never got the task. Close what we opened so no
 			// half-started executor sits idle in the user's tab.
-			void this.#herdr(["tab", "close", where.tabId]);
+			if (where.createdTab) void this.#herdr(["tab", "close", where.tabId]);
 			return { ok: false, error: sent.error };
 		}
 		meta.pane = { workspaceId, tabId: where.tabId, paneId: where.paneId, label };
@@ -228,18 +238,22 @@ export class Supervisor {
 	}
 
 	/** The pane this job should run in: reuse the ticket tab, or open a new one. */
-	async #jobPane(worktree: string, workspaceId: string, label: string): Promise<{ ok: true; tabId: string; paneId: string } | { ok: false; error: string }> {
+	async #jobPane(worktree: string, workspaceId: string, label: string): Promise<{ ok: true; tabId: string; paneId: string; createdTab: boolean } | { ok: false; error: string }> {
 		const open = [...this.#jobs.values()].filter((job) => job.pane?.workspaceId === workspaceId && job.pane.label === label && job.paneClosedAt === undefined);
 		const host = open.at(-1)?.pane;
-		if (!host || open.length >= TAB_FANOUT_LIMIT) return this.#newTab(worktree, workspaceId, label);
+		if (!host || open.length >= TAB_FANOUT_LIMIT) {
+			const fresh = await this.#newTab(worktree, workspaceId, label);
+			return fresh.ok ? { ...fresh, createdTab: true } : fresh;
+		}
 		const split = await this.#herdr(paneSplitArgv(host.paneId, paneDirection(open.length - 1), worktree));
 		if (!split.ok) {
 			// The tab may be gone (closed by hand). A fresh tab is always valid.
-			return this.#newTab(worktree, workspaceId, label);
+			const fresh = await this.#newTab(worktree, workspaceId, label);
+			return fresh.ok ? { ...fresh, createdTab: true } : fresh;
 		}
 		const paneId = parsePaneSplit(split.stdout);
 		if (!paneId) return { ok: false, error: "herdr pane split returned no pane id" };
-		return { ok: true, tabId: host.tabId, paneId };
+		return { ok: true, tabId: host.tabId, paneId, createdTab: false };
 	}
 
 	async #newTab(worktree: string, workspaceId: string, label: string): Promise<{ ok: true; tabId: string; paneId: string } | { ok: false; error: string }> {
@@ -286,9 +300,17 @@ export class Supervisor {
 		return parseAgentGet(read.stdout);
 	}
 
-	/** One herdr CLI call. Any failure comes back as a message, never a throw. */	async #herdr(args: string[]): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
+	/**
+	 * One herdr CLI call. Any failure comes back as a message, never a throw.
+	 *
+	 * `timeoutMs` is per call because the calls are not alike: a list returns in
+	 * milliseconds, while `agent start` waits for the executor's TUI to come up and
+	 * must outlive that wait. Killing the CLI mid-wait is what previously read as
+	 * `agent_not_ready`.
+	 */
+	async #herdr(args: string[], timeoutMs = 15_000): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
 		try {
-			const { stdout } = await execFileAsync(this.settings.herdrBin, args, { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
+			const { stdout } = await execFileAsync(this.settings.herdrBin, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
 			return { ok: true, stdout };
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

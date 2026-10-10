@@ -20,6 +20,7 @@ const settings: FleetSettings = {
 	gitGuard: true,
 	paneMode: "auto",
 	herdrBin: "herdr",
+	agentStartMs: 90_000,
 	notify: true,
 };
 

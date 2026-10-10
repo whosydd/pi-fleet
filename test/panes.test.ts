@@ -38,6 +38,7 @@ function settingsFor(dir: string, overrides: Partial<FleetSettings> = {}): Fleet
 		// stand-in, and interactive mode stays off unless a test asks for it by name.
 		paneMode: "off",
 		herdrBin: FAKE_HERDR,
+		agentStartMs: 90_000,
 		notify: true,
 		...overrides,
 	};
@@ -111,9 +112,9 @@ test("agent names stay inside herdr's rule and stay unique per dispatch", () => 
 });
 
 test("agent argv: the model override rides after --, the task is one argument", () => {
-	assert.deepEqual(agentStartArgv("fleet-42-x1", "codex", "w1:p2"), ["agent", "start", "fleet-42-x1", "--kind", "codex", "--pane", "w1:p2"]);
-	assert.deepEqual(agentStartArgv("fleet-42-x1", "codex", "w1:p2", "gpt-6"), ["agent", "start", "fleet-42-x1", "--kind", "codex", "--pane", "w1:p2", "--", "-m", "gpt-6"]);
-	assert.deepEqual(agentStartArgv("n", "claude", "w1:p2", "sonnet"), ["agent", "start", "n", "--kind", "claude", "--pane", "w1:p2", "--", "--model", "sonnet"]);
+	assert.deepEqual(agentStartArgv("fleet-42-x1", "codex", "w1:p2"), ["agent", "start", "fleet-42-x1", "--kind", "codex", "--pane", "w1:p2", "--timeout", "90000"]);
+	assert.deepEqual(agentStartArgv("fleet-42-x1", "codex", "w1:p2", "gpt-6"), ["agent", "start", "fleet-42-x1", "--kind", "codex", "--pane", "w1:p2", "--timeout", "90000", "--", "-m", "gpt-6"]);
+	assert.deepEqual(agentStartArgv("n", "claude", "w1:p2", "sonnet"), ["agent", "start", "n", "--kind", "claude", "--pane", "w1:p2", "--timeout", "90000", "--", "--model", "sonnet"]);
 	assert.deepEqual(agentPromptArgv("fleet-42-x1", "Build it."), ["agent", "prompt", "fleet-42-x1", "Build it."]);
 	assert.deepEqual(agentGetArgv("fleet-42-x1"), ["agent", "get", "fleet-42-x1"]);
 	assert.deepEqual(agentWaitArgv("fleet-42-x1", 5000), ["agent", "wait", "fleet-42-x1", "--until", "idle", "--until", "done", "--until", "blocked", "--timeout", "5000"]);

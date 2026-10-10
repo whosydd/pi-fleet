@@ -108,6 +108,8 @@ export interface FleetSettings {
 	/** Run executors as interactive Herdr agents: auto = when this session sits in Herdr (HERDR_ENV=1). */
 	paneMode: "auto" | "on" | "off";
 	herdrBin: string;
+	/** How long to wait for an executor TUI to come up before degrading to a spawn. */
+	agentStartMs: number;
 	/** Ping a human when an executor finishes (PI_FLEET_NOTIFY=off disables). */
 	notify: boolean;
 }

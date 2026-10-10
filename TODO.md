@@ -34,6 +34,9 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   `--json-schema` 在 stdout 给出 `structured_output`；gate 与 triage 在真实 brief
   和真实 findings 上行为正确。
   依赖：无。这一项不过，后面所有改动都缺乏回归基线。
+  注：p23 的 worktree 位置是手工 `git worktree add` 的遗产（在 pi 仓库树内）；
+  新票一律 `herdr worktree create`（落 `~/.herdr/worktrees/<repo>/<branch>`，
+  自带 workspace），别再手摆路径。
   风险：`claude -p` 在用户自己的权限配置下可能拒绝跑测试（pi 不干预权限），届时
   改执行器侧配置，不是 argv。
 
@@ -57,8 +60,12 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   - 已修：run-dir 根目录是相对路径，编排者按主仓库解析、执行器按 worktree 解析，
     codex 0.6 秒退出并报 `Failed to read output schema file ... No such file or
     directory`。`48d7fe3` 把根目录解析成绝对路径。
-  - 未过：claude `structured_output` 提取（并入 #3）、review triage 在真
-    findings 上的行为。
+  - claude 腿已过（同日，评审任务走 detached spawn）：`--json-schema` 在 stdout
+    给出 `structured_output`，收割过校验；triage 在真 findings 上跑了第一轮
+    （1 blocker + 6 待人工）。遗留小病：triage 文案里 style 计数为 -1，查
+    judgments.ts 的计数。
+  - 未过：交互模式下的 claude（评审那次是 agent start 被自伤超时杀掉后退回的
+    one-shot；修完 `agentStartMs` 已能起，见 #27）。
   - **sandbox 问题已答**：codex 的 `-o` 能写到执行器工作区之外（实测
     `/tmp/pf2/probe/result.json` 写出了内容）。`--output-schema` 读工作区外文件
     也已实测可行。但 `--output-schema` **不硬约束最终消息**：provider 403 时
@@ -70,6 +77,30 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
     `/tmp/p23-brief.md`（重启会没，下文四项要求照旧重写即可）。
 
 ## P1 — 编排闭环
+- [ ] **#28 票内 pane 布局：左执行、右评审**（本仓库）
+  范围：tab 仍按票分。票 tab 左侧是执行区（codex，可按并发 split 多个 pane），
+  右侧固定一格评审区（claude，一轮评审一个 pane，跨 fix 轮不关，人随时能看）。
+  `panes.ts` 新增纯函数 `ticketLayout(jobs)`：输入票内活跃 job（角色+序号），
+  输出每个 job 的 pane 动作（reuse/split left/split right/new tab）；
+  `#jobPane` 改按角色取位。评审 pane 复用规则与 #29 的循环绑定。
+  验收：`test/panes.test.ts` 补布局用例（0/1/多执行 job、并发评审轮）；fake herdr
+  断言 split 方向与 pane 归属。
+  依赖：无（#29 依赖本项的评审 pane 复用）。
+
+- [ ] **#29 票内自动评审循环：implement → review → fix → …**（本仓库）
+  范围：循环不经模型，事件驱动挂在 `onSettled`：
+  implement 契约过 → 自动派 review（claude，同 worktree，brief 带 base 与 diff 范围）；
+  review 契约 `blockers>0` → 自动派 fix 轮（codex，brief 由 findings 组装，
+  `fix_round: N+1`，跳过 brief gate）；收敛条件 = review 契约零 blocker（style/
+  human-confirm 项不触发循环，只进 ledger）；`PI_FLEET_MAX_FIX_ROUND` 到帽 → 状态
+  `escalated` + ping 人，不再自动派。每步失败降级为 note + ping 人，永不静默死循环。
+  验收：fake herdr 走通 implement→review→fix→review→done 全链与到帽升级两条路；
+  真票跑一轮（现成 findings：preflight catch 无测试、#23 仅交付 1/3 项）。
+  分类一律走 Jev 通道（judgments.ts 现有 classify 用法之上）：blocker 还是 style、
+  findings 是否值得起一轮 fix、派发/收割该报告给人还是自己消化——都是概率判断，不
+  让编排模型逐条读散文。通道失败或读数缺失 → 降级 note + ping 人，绝不因此阻塞循环
+  （invariant：判断永远是 advisory and degradable）。
+  依赖：#28。
 
 - [ ] **#16 frontier 暴露给模型**（本仓库）
   范围：`FleetStatus` 增加可选 `tickets` 参数，返回 `ready` / `waiting` / `errors`。
