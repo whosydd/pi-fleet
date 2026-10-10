@@ -44,6 +44,9 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
     0.99 → pass，走 pi 自带 registry，无额外凭据）、spawn 与 detached meta.json
     落盘、跨会话收割（新 session `loadFromDisk` 认出 job，报 failed + exit code +
     stderr 路径）。
+  - gate 反向证据（同日，pane 演示现场）：一张把入口点写成“仓库根目录”的 brief
+    被判 entry 0.64 / acceptance 0.98 / scope 0.99 → 拒派，并点名缺哪一维；
+    改成列出具体文件与命令后过线。阈值 0.7 在真话上分得开薄与厚。
   - 已修：run-dir 根目录是相对路径，编排者按主仓库解析、执行器按 worktree 解析，
     codex 0.6 秒退出并报 `Failed to read output schema file ... No such file or
     directory`。`48d7fe3` 把根目录解析成绝对路径。
@@ -78,6 +81,13 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   结果里写明原因。观测通道永远不能阻塞派发。
   验收：`test/panes.test.ts` 11 项（fake herdr 走真 bash 跑真 run.sh，日志/pid/
   exit_code 落盘）；真会话验一次（stand-in 执行器，不等额度）。
+  2026-10-10 真会话验过（`PI_FLEET_CODEX_BIN` 指到 stand-in，不花额度）：
+  `herdr worktree create` 开 w26 → FleetDispatch 在 w26:t2 开 tab → pane 里
+  实时看到执行器输出 → 跑完 tab 不关，worktree 里的 commit 留着可查 → 另一个
+  headless 会话从磁盘认回 job 并判成 contract_complete → FleetCleanup all 只关掉
+  w26:t2，w26:t1 和 worktree 不动。演示现场已清（worktree + 分支 + 临时 state 目录）。
+  仍未验：pane 里真 codex 的 `-o` 能否写在执行器工作区之外（stand-in 绕过了
+  sandbox），归 #15。
   依赖：无。本轮需求：用户要看到 codex 在干什么，不要黑箱。
 
 - [ ] **#17 执行器完成通知**（本仓库）
