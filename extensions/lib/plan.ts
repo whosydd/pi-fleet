@@ -81,6 +81,7 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env, cwd: string =
 		paneMode: parsePaneMode(env.PI_FLEET_PANES),
 		herdrBin: env.PI_FLEET_HERDR_BIN || "herdr",
 		agentStartMs: parsePositive(env.PI_FLEET_AGENT_START_MS, 90_000),
+		loop: (env.PI_FLEET_LOOP || "on").toLowerCase() !== "off",
 		notify: (env.PI_FLEET_NOTIFY || "on").toLowerCase() !== "off",
 	};
 }

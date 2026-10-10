@@ -110,6 +110,8 @@ export interface FleetSettings {
 	herdrBin: string;
 	/** How long to wait for an executor TUI to come up before degrading to a spawn. */
 	agentStartMs: number;
+	/** Run the ticket's review loop without a model turn (PI_FLEET_LOOP=off disables). */
+	loop: boolean;
 	/** Ping a human when an executor finishes (PI_FLEET_NOTIFY=off disables). */
 	notify: boolean;
 }

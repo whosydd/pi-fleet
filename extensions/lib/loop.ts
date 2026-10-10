@@ -48,3 +48,37 @@ export function nextStep(meta: JobMeta, maxFixRound: number, triageAvailable: bo
 	}
 	return { kind: "review" };
 }
+
+/**
+ * The review brief the fleet writes for itself after an implement job passed its
+ * contract. It names the fixed point and the two axes, because the reviewer reads
+ * this text and nothing else.
+ */
+export function reviewBriefFor(meta: JobMeta, contract: { branch?: string; commits?: unknown[]; summary?: string }): string {
+	const base = meta.base ?? contract.branch ?? "HEAD~1";
+	const commits = contract.commits?.length ?? 0;
+	const claim = contract.summary ? `What the implementer claims it does: ${contract.summary}` : "What the implementer claims is unstated; read the diff.";
+	return [
+		"Review task: judge the committed work on this branch against two axes and write the contract file.",
+		"",
+		`The diff under review: git diff ${base}..HEAD (${commits} commit(s) reported by the implementation job). Read it in full first.`,
+		claim,
+		"",
+		"Axis 1 - standards: report findings as rule/file/line/quote. Check the documented interface rules of this repository, dead code, error handling that swallows a failure, and any invariant the diff weakens.",
+		"Axis 2 - spec: does the code do what the ticket says? Report findings as quote/file/line, where quote is the ticket sentence the code fails or satisfies.",
+		"",
+		"Out of scope: do not fix anything, do not commit, do not push, do not close a ticket.",
+	].join("\n");
+}
+
+/** The fix brief the fleet writes for a review that found blockers. */
+export function fixBriefFor(meta: JobMeta, findings: string[]): string {
+	return [
+		`Fix round ${meta.fixRound + 1} for ticket ${meta.ticket}: the review of your previous work found ${findings.length} blocker(s). Resolve every one of them, then commit.`,
+		"",
+		"Blockers (from the review's own findings, classified by the triage channel):",
+		...findings.map((finding) => `- ${finding}`),
+		"",
+		"If a blocker is wrong or you refuse it, say so in the contract's summary instead of silently skipping it. Never run git stash, git commit --amend, or any force push.",
+	].join("\n");
+}

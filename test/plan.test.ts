@@ -21,6 +21,7 @@ const settings: FleetSettings = {
 	paneMode: "auto",
 	herdrBin: "herdr",
 	agentStartMs: 90_000,
+	loop: false,
 	notify: true,
 };
 

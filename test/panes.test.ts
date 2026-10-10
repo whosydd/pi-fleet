@@ -41,7 +41,8 @@ function settingsFor(dir: string, overrides: Partial<FleetSettings> = {}): Fleet
 		paneMode: "off",
 		herdrBin: FAKE_HERDR,
 		agentStartMs: 90_000,
-		notify: true,
+		loop: false,
+	notify: true,
 		...overrides,
 	};
 }

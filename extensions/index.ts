@@ -45,7 +45,7 @@
  *   PI_FLEET_TRIAGE_CONFIDENCE triage confidence floor (default: 0.8)
  */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -63,9 +63,10 @@ import {
 import { findGitHazard } from "./lib/gitguard.ts";
 import { closableTabs, isAgentWaiting } from "./lib/panes.ts";
 import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
+import { fixBriefFor, nextStep, reviewBriefFor } from "./lib/loop.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
 import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
-import { isExecutorKind, isTaskKind, type JobMeta } from "./lib/types.ts";
+import { isExecutorKind, isTaskKind, type ExecutorKind, type JobMeta } from "./lib/types.ts";
 const DISPATCH_TOOL_DESCRIPTION = `Dispatch a one-shot executor (codex exec or claude -p) to implement or review one ticket in its own git worktree. Detached: returns a job id immediately; harvest with FleetHarvest on a later turn.
 
 Rules the tool enforces (it refuses instead of guessing):
@@ -100,6 +101,8 @@ function jobLine(meta: JobMeta): string {
 
 export default function fleetExtension(pi: ExtensionAPI) {
 	const settings = readSettings();
+	/** The pi tool context, taken from the dispatch tool's own signature. */
+	type ChainCtx = Parameters<typeof dispatchTool.execute>[4];
 	const judgeSettings = readJudgmentSettings();
 	const supervisor = new Supervisor(settings);
 
@@ -249,6 +252,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			// script, so pi pings it here when the child exits. Only one of the two
 			// channels ever fires for a given job.
 			const onSettled = (settled: JobMeta): void => {
+				if (settings.loop) void advanceChain(ctx, settled.id);
 				if (!settings.notify) return;
 				const title = `fleet: ${settled.ticket} finished`;
 				// The two forms report different facts: a spawn leaves an exit code, an
@@ -414,9 +418,94 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	/**
+	 * Dispatches the loop may add per ticket, counted in this session. Fix rounds
+	 * are capped in plan.ts; this only stops a chain that keeps re-opening
+	 * reviews for the same ticket.
+	 */
+	const CHAIN_DISPATCH_BUDGET = 6;
+	const chainHops = new Map<string, number>();
+
+	/** The harness that did not write the code under review. */
+	function otherExecutor(executor: ExecutorKind): ExecutorKind {
+		return executor === "codex" ? "claude" : "codex";
+	}
+
+	/** The contract file the job wrote, or undefined when it cannot be read. */
+	function readContract(meta: JobMeta): { branch?: string; commits?: unknown[]; summary?: string } | undefined {
+		try {
+			return JSON.parse(readFileSync(meta.paths.resultPath, "utf8"));
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Tell a human where the loop stopped, on whichever channel this session has. */
+	async function pingLoop(ctx: ChainCtx, meta: JobMeta, body: string): Promise<void> {
+		if (!settings.notify) return;
+		const title = `fleet: ${meta.ticket} loop`;
+		if (ctx.hasUI) ctx.ui.notify(`${title}: ${body}`, "info");
+		else await supervisor.notify(title, body);
+	}
+
+	/**
+	 * The ticket's review loop, driven by events instead of a model turn.
+	 *
+	 * When a job settles, harvest it and ask loop.ts what comes next. The chain
+	 * calls the same tools a model would call, so the gate, the triage, and the
+	 * once-per-job ledger entry are not a second implementation of them.
+	 *
+	 * Spend is bounded twice: fix rounds stop at PI_FLEET_MAX_FIX_ROUND in
+	 * plan.ts, and a ticket gets at most CHAIN_DISPATCH_BUDGET loop dispatches.
+	 * An unavailable judgment channel makes nextStep halt, so the loop degrades
+	 * to a note instead of inventing a round.
+	 */
+	async function advanceChain(ctx: ChainCtx, jobId: string): Promise<void> {
+		const job = supervisor.get(jobId);
+		if (!job) return;
+		const ticket = job.ticket;
+		const hops = chainHops.get(ticket) ?? 0;
+		if (hops >= CHAIN_DISPATCH_BUDGET) {
+			await pingLoop(ctx, job, `stopped: ticket ${ticket} reached the loop budget of ${CHAIN_DISPATCH_BUDGET} dispatches`);
+			return;
+		}
+		// Harvest through the tool: it judges the contract, runs the triage, and
+		// reports the job to the ledger exactly once.
+		await harvestTool.execute("fleet-loop", { job_id: jobId }, undefined, undefined, ctx);
+		const settled = supervisor.get(jobId);
+		if (!settled) return;
+		const step = nextStep(settled, settings.maxFixRound, settled.triage !== undefined || !judgeSettings.enabled);
+		if (step.kind === "review") {
+			const contract = readContract(settled);
+			chainHops.set(ticket, hops + 1);
+			await dispatchTool.execute(
+				"fleet-loop",
+				{ ticket, worktree: settled.worktree, executor: otherExecutor(settled.executor), task_kind: "review", brief: reviewBriefFor(settled, contract ?? {}), base: contract?.branch ?? "HEAD~1" },
+				undefined,
+				undefined,
+				ctx,
+			);
+			return;
+		}
+		if (step.kind === "fix") {
+			chainHops.set(ticket, hops + 1);
+			await dispatchTool.execute(
+				"fleet-loop",
+				{ ticket, worktree: settled.worktree, executor: otherExecutor(settled.executor), task_kind: "implement", brief: fixBriefFor(settled, step.findings), fix_round: settled.fixRound + 1 },
+				undefined,
+				undefined,
+				ctx,
+			);
+			return;
+		}
+		if (step.kind === "done") {
+			await pingLoop(ctx, settled, `closed: the review found no blockers. Harvest and the branch are yours to merge.`);
+			return;
+		}
+		await pingLoop(ctx, settled, `halted: ${step.reason}`);
+	}
 	const statusTool = defineTool({
-		name: "FleetStatus",
-		label: "Fleet Status",
+		name: "FleetStatus",		label: "Fleet Status",
 		description: STATUS_TOOL_DESCRIPTION,
 		promptSnippet: "List dispatched fleet jobs and their states",
 		promptGuidelines: ["Call FleetStatus with no arguments when you need to see what is in flight or what to harvest next."],
