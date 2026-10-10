@@ -572,19 +572,12 @@ export class Supervisor {
 		}
 
 		// complete or contract_failed: judge the contract now.
+		//
+		// A one-shot claude run carries the contract in its stdout envelope and never
+		// writes result.json, so its output is read first and back-filled into the
+		// file. Reading the file first would fail with ENOENT and settle every claude
+		// job as contract_failed before its output was ever looked at.
 		let contract: unknown;
-		try {
-			contract = readJson(meta.paths.resultPath);
-		} catch (error) {
-			meta.state = "contract_failed";
-			meta.contractError = `result.json unreadable: ${error instanceof Error ? error.message : String(error)}`;
-			meta.contractOk = false;
-			this.persist(meta);
-			return { outcome: { kind: "contract_failed", meta, error: meta.contractError } };
-		}
-
-		// claude writes the contract into stdout; pull it out and back-fill the
-		// result file so both executors leave the same artifact shape behind.
 		if (meta.executor === "claude" && meta.runner !== "agent") {
 			const stdoutText = readIfExists(meta.paths.stdoutPath);
 			const parsed = parseClaudeStdout(stdoutText);
@@ -597,6 +590,16 @@ export class Supervisor {
 			}
 			contract = parsed.structured;
 			writeFileSync(meta.paths.resultPath, JSON.stringify(parsed.structured, null, 2), "utf8");
+		} else {
+			try {
+				contract = readJson(meta.paths.resultPath);
+			} catch (error) {
+				meta.state = "contract_failed";
+				meta.contractError = `result.json unreadable: ${error instanceof Error ? error.message : String(error)}`;
+				meta.contractOk = false;
+				this.persist(meta);
+				return { outcome: { kind: "contract_failed", meta, error: meta.contractError } };
+			}
 		}
 
 		const check = validateContract(meta.taskKind, contract);

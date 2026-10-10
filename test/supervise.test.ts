@@ -10,6 +10,8 @@ import { Supervisor } from "../extensions/lib/supervise.ts";
 const FAKE = new URL("./helpers/fake-codex.mjs", import.meta.url).pathname;
 /** The stand-in for a claude run the provider refused: exit 1, cause on stdout. */
 const FAKE_CLAUDE_REFUSED = new URL("./helpers/fake-claude-quota.mjs", import.meta.url).pathname;
+/** The stand-in for a claude review run: the contract lives in the stdout envelope. */
+const FAKE_CLAUDE_REVIEW = new URL("./helpers/fake-claude-review.mjs", import.meta.url).pathname;
 
 function settingsFor(dir: string): FleetSettings {
 	return {
@@ -23,7 +25,8 @@ function settingsFor(dir: string): FleetSettings {
 		paneMode: "off",
 		herdrBin: "herdr",
 		agentStartMs: 90_000,
-		notify: true,
+		loop: false,
+	notify: true,
 	};
 }
 
@@ -168,6 +171,34 @@ test("an inherited running job past its wall-clock ceiling settles as timeout", 
 			assert.match(report.outcome.error, /timed out after/);
 			assert.match(report.outcome.error, /stop it by hand/);
 		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a claude review job settles from its stdout envelope, not from a file it never writes", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-claude-review-"));
+	try {
+		const supervisor = new Supervisor(settingsFor(dir));
+		const plan = planFor(dir, "Review the diff.");
+		plan.executor = "claude";
+		plan.taskKind = "review";
+		plan.base = "deadbeef";
+		plan.command = ["node", FAKE_CLAUDE_REVIEW];
+		const meta = await supervisor.dispatch(plan, plan.prompt);
+
+		// The stand-in exits 0 and writes no result.json: reading the file first
+		// settled every claude job as contract_failed before its output was looked at.
+		assert.equal(await settle(supervisor, meta.id), "complete");
+		const report = await supervisor.refresh(meta.id);
+		// refresh() calls the settled state "complete"; the tool reports the same
+		// verdict to the model as contract_complete.
+		assert.equal(report.outcome.kind, "complete");
+		assert.equal((report.outcome as { meta: { contractOk?: boolean } }).meta.contractOk, true);
+		// The contract is back-filled so both executors leave the same artifact.
+		const written = JSON.parse(readFileSync(plan.paths.resultPath, "utf8")) as { base?: string; spec?: { spec_found?: boolean } };
+		assert.equal(written.base, "deadbeef");
+		assert.equal(written.spec?.spec_found, true);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
