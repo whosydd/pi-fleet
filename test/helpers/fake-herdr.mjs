@@ -80,6 +80,12 @@ if (group === "tab" && verb === "create") {
 
 if (group === "tab" && verb === "close") {
 	record({ tabId: rest[0] });
+	// A tab that is already gone answers the way herdr does: the cleanup path has
+	// to treat that as nothing left to close, not as a failure.
+	if (process.env.FAKE_HERDR_TAB_GONE === "1") {
+		emit({ error: { code: "tab_not_found", message: `tab ${rest[0]} not found` }, id: "cli:tab:close" });
+		process.exit(1);
+	}
 	emit({ id: "cli:tab:close", result: { type: "ok" } });
 	process.exit(0);
 }

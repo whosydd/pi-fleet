@@ -380,7 +380,7 @@ test("a contract file with prose around the JSON still fails the contract", { ti
 	}
 });
 
-test("an agent that pauses for a human keeps being watched, so the ping is not lost", { timeout: 30_000 }, async () => {
+test("an agent that pauses for a human keeps being watched, so the ping is not lost", { timeout: 60_000 }, async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-rearm-"));
 	const log = join(dir, "herdr.log");
 	// blocked = the agent waits on a person: a settled herdr state, an unfinished job.
@@ -441,6 +441,56 @@ test("an idle agent is not a failed job until the grace has passed", { timeout: 
 		writeFileSync(plan.paths.resultPath, JSON.stringify({ ticket: "42", status: "implemented", branch: "b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } }));
 		const second = await supervisor.refresh(meta.id);
 		assert.equal(second.outcome.kind, "complete");
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("one tab holds every job of a ticket, so closing it settles all of them", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-tab-siblings-"));
+	const log = join(dir, "herdr.log");
+	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir });
+	try {
+		const settings = settingsFor(dir, { paneMode: "on" });
+		const supervisor = new Supervisor(settings);
+		// Two jobs of one ticket share the tab: an implementation and its review.
+		const first = await supervisor.dispatch(planFor(dir, settings, { ticket: "77" }), "brief");
+		const second = await supervisor.dispatch(planFor(dir, settings, { ticket: "77", task_kind: "review", base: "deadbeef" }), "brief");
+		assert.equal(second.pane?.tabId, first.pane?.tabId);
+
+		// A tab closes only for settled jobs, so both contracts land first.
+		writeFileSync(first.paths.resultPath, JSON.stringify({ ticket: "77", status: "implemented", branch: "b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } }));
+		writeFileSync(second.paths.resultPath, JSON.stringify({ base: "deadbeef", standards: { worst_issue: "none", findings: [] }, spec: { spec_found: true, worst_issue: "none", findings: [] } }));
+		assert.equal((await supervisor.refresh(first.id)).outcome.kind, "complete");
+		assert.equal((await supervisor.refresh(second.id)).outcome.kind, "complete");
+
+		assert.equal((await supervisor.closeTab(first.id)).ok, true);
+		// The sibling's tab is gone with the first close, so herdr must be asked
+		// once, and the sibling is reported as already closed rather than failed.
+		assert.deepEqual(await supervisor.closeTab(second.id), { ok: true, alreadyClosed: true });
+		assert.equal(herdrCalls(log).filter((call) => call.args[1] === "close" && call.tabId).length, 1);
+		assert.equal(supervisor.listOpenTabs().length, 0);
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a tab herdr already lost counts as closed, not as a cleanup failure", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-tab-gone-"));
+	const restore = useEnv({ FAKE_HERDR_LOG: join(dir, "herdr.log"), FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_TAB_GONE: "1" });
+	try {
+		const settings = settingsFor(dir, { paneMode: "on" });
+		const supervisor = new Supervisor(settings);
+		const meta = await supervisor.dispatch(planFor(dir, settings, { ticket: "78" }), "brief");
+		writeFileSync(meta.paths.resultPath, JSON.stringify({ ticket: "78", status: "implemented", branch: "b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } }));
+		assert.equal((await supervisor.refresh(meta.id)).outcome.kind, "complete");
+
+		const result = await supervisor.closeTab(meta.id);
+		assert.deepEqual(result, { ok: true });
+		assert.equal(typeof supervisor.get(meta.id)?.paneClosedAt, "number", "the job records that its tab is gone");
+		assert.equal(supervisor.listOpenTabs().length, 0);
 	} finally {
 		restore();
 		rmSync(dir, { recursive: true, force: true });

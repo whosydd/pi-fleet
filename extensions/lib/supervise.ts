@@ -357,7 +357,13 @@ export class Supervisor {
 			return { ok: true, stdout };
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			return { ok: false, error: `${this.settings.herdrBin} ${args.join(" ")} failed: ${message}` };
+			// herdr reports its own failures as JSON on stdout and exits non-zero, so
+			// the child's output carries the reason ("tab_not_found", a usage error)
+			// that the exception message alone does not: without it a cleanup failure
+			// reads as "Command failed" with nothing to act on.
+			const failure = error as { stdout?: string; stderr?: string };
+			const detail = `${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim().replace(/\s+/g, " ");
+			return { ok: false, error: `${this.settings.herdrBin} ${args.join(" ")} failed: ${message}${detail ? ` | ${detail.slice(0, 300)}` : ""}` };
 		}
 	}
 
@@ -476,10 +482,20 @@ export class Supervisor {
 		if (!meta.pane) return { ok: false, error: "job did not run in a Herdr pane" };
 		if (meta.state === "running") return { ok: false, error: `job ${id} is still running in pane ${meta.pane.tabId}; harvest it first` };
 		if (meta.paneClosedAt !== undefined) return { ok: true, alreadyClosed: true };
-		const closed = await this.#herdr(["tab", "close", meta.pane.tabId]);
-		if (!closed.ok) return { ok: false, error: closed.error };
-		meta.paneClosedAt = Date.now();
-		this.persist(meta);
+		const tabId = meta.pane.tabId;
+		const closed = await this.#herdr(["tab", "close", tabId]);
+		// A tab herdr no longer has is a tab that needs no closing: a human may have
+		// closed it by hand, or a sibling job's close already took it. The
+		// bookkeeping below still has to happen, or the jobs point at a tab that is
+		// gone and every later cleanup reports a failure.
+		if (!closed.ok && !/tab_not_found/.test(closed.error)) return { ok: false, error: closed.error };
+		// One tab holds every job of a ticket, so all of them lose it at once.
+		const at = Date.now();
+		for (const job of this.#jobs.values()) {
+			if (job.pane?.tabId !== tabId || job.paneClosedAt !== undefined) continue;
+			job.paneClosedAt = at;
+			this.persist(job);
+		}
 		return { ok: true };
 	}
 
