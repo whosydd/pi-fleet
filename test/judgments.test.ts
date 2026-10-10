@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildGateContext, buildTriageContext, interpretGate, interpretTriage, readJudgmentSettings, summarizeTriage, type ClassifierAnswer, uncertainIndices } from "../extensions/lib/judgments.ts";
+import { buildGateContext, buildTriageContext, classifyViaRegistry, interpretGate, interpretTriage, readJudgmentSettings, summarizeTriage, type ClassifierAnswer, type ClassifyRegistry, uncertainIndices } from "../extensions/lib/judgments.ts";
 
 const bool = (probability: number): ClassifierAnswer => ({ type: "bool", probability });
 const choice = (choice: string, confidence: number): ClassifierAnswer => ({ type: "choice", choice, probabilities: {}, confidence });
@@ -117,4 +117,33 @@ test("triage counts partition the findings, and uncertain is a separate axis", (
 	assert.equal(tally.blockers + tally.style + tally.ignore, records.length);
 	assert.deepEqual(uncertainIndices(records), [1]);
 	assert.deepEqual(summarizeTriage([]), { blockers: 0, style: 0, ignore: 0, uncertain: 0 });
+});
+
+/** A registry that answers every gate noul with 0.9 and reports a token usage. */
+function standInRegistry(result: Record<string, unknown>): ClassifyRegistry {
+	return {
+		findOfType: () => ({}),
+		classify: async () => result,
+	} as unknown as ClassifyRegistry;
+}
+
+test("a classifier call carries its own spend to the caller", async () => {
+	const registry = standInRegistry({
+		stopReason: "stop",
+		answers: { has_entry_points: bool(0.9), has_acceptance: bool(0.9), has_scope_boundary: bool(0.9) },
+		usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120, cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 } },
+	});
+	const attempt = await classifyViaRegistry(registry, readJudgmentSettings({}), buildGateContext("Entry points: x. Acceptance: y. Out of scope: z."));
+	assert.equal(attempt.ok, true);
+	assert.deepEqual((attempt as { usage?: { tokens: number; cost: number } }).usage, { tokens: 120, cost: 0.003 });
+
+	// A provider that reports no counts yields no usage, rather than a zero report.
+	const silent = standInRegistry({ stopReason: "stop", answers: {} });
+	const second = await classifyViaRegistry(silent, readJudgmentSettings({}), buildGateContext("x"));
+	assert.equal((second as { usage?: unknown }).usage, undefined);
+
+	// A failed call reports a reason and never a usage.
+	const failed = standInRegistry({ stopReason: "error", errorMessage: "403 quota insufficient" });
+	const third = await classifyViaRegistry(failed, readJudgmentSettings({}), buildGateContext("x"));
+	assert.deepEqual(third, { ok: false, reason: "403 quota insufficient" });
 });

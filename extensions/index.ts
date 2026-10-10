@@ -55,6 +55,7 @@ import {
 	classifyViaRegistry,
 	interpretGate,
 	interpretTriage,
+	type JudgmentUsage,
 	summarizeTriage,
 	uncertainIndices,
 	readJudgmentSettings,
@@ -158,12 +159,12 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	 * Run the Jev gate over a brief. Degrades to undefined on any channel
 	 * failure: an unavailable judgment channel must not block dispatching.
 	 */
-	async function gateBrief(brief: string, registry: ClassifyRegistry): Promise<{ verdict?: ReturnType<typeof interpretGate>; note?: string }> {
+	async function gateBrief(brief: string, registry: ClassifyRegistry): Promise<{ verdict?: ReturnType<typeof interpretGate>; note?: string; usage?: JudgmentUsage }> {
 		if (!judgeSettings.enabled) return {};
 		try {
 			const attempt = await classifyViaRegistry(registry, judgeSettings, buildGateContext(brief));
 			if (!attempt.ok) return { note: `judgment channel unavailable, gate skipped (${attempt.reason})` };
-			return { verdict: interpretGate(attempt.answers, { floor: judgeSettings.gateFloor, warn: judgeSettings.gateWarn }) };
+			return { verdict: interpretGate(attempt.answers, { floor: judgeSettings.gateFloor, warn: judgeSettings.gateWarn }), usage: attempt.usage };
 		} catch (error) {
 			return { note: `judgment channel failed, gate skipped (${error instanceof Error ? error.message : String(error)})` };
 		}
@@ -234,7 +235,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 				return textResult(
 					`Dispatch refused: the brief looks under-specified (${missing} below the ${judgeSettings.gateFloor} readiness floor).\n` +
 						`Fix the brief before dispatching: name the entry points or APIs, add checkable acceptance criteria, state what is out of scope.\n` +
-						`Probabilities: ${JSON.stringify(gate.verdict.probabilities)}`,
+							`Probabilities: ${JSON.stringify(gate.verdict.probabilities)}` + (gate.usage ? `\nGate spend: ${gate.usage.tokens} tokens, $${gate.usage.cost.toFixed(4)} (this session's own account, not the executor's).` : ""),
 					{ status: "rejected", gate: gate.verdict },
 				);
 			}
@@ -244,6 +245,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 						acceptance: gate.verdict.probabilities.acceptance,
 						scopeBoundary: gate.verdict.probabilities.scope_boundary,
 						outcome: gate.verdict.outcome === "warn" ? ("warn" as const) : ("pass" as const),
+						usage: gate.usage,
 					}
 				: undefined;
 			const warnNote =

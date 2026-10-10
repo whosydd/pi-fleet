@@ -84,6 +84,8 @@ export interface GateRecord {
 	acceptance: number;
 	scopeBoundary: number;
 	outcome: "pass" | "warn";
+	/** What the gate's classifier call cost this session's own account (not the executor's). */
+	usage?: { tokens: number; cost: number };
 }
 
 export interface TriageRecord {

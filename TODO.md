@@ -267,13 +267,13 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   词不误伤），接线同时盖 `tool_call`（模型的 bash 工具）与 `user_bash`（用户的 `!`），
   `PI_FLEET_GIT_GUARD=off` 可关。真会话实测：`git stash list` 被拦，回原因与替代命令。
 
-- [ ] **#23 小项打包**（本仓库）—— 剩两项
+- [x] **#23 小项打包**（本仓库）—— 已清空
   gate 的 classify usage 附进 dispatch 结果（已完成：claude implement 的 argv 正向
   断言已进 `test/plan.test.ts`，含 schema 无 `format` 关键字这一条）。`.fleet/` 在首次
   派发时自动写入项目 `.gitignore` 这一项先留着：它就是 #15 的试金石票，自己实现掉
   就没票可跑了。
-  另记一项不一致：`profiles.ts` 的注释说 codex 走 `--json` 向 stdout 流事件，
-  argv 里实际没有 `--json`，README 也没写。改代码或改注释，不能两边都留着。
+  （曾经记为不一致的 `profiles.ts` 注释已不存在：注释现在只写 argv 真带的东西
+  ——codex 的 `-o`/`--output-schema`、claude 的 `--json-schema` → `structured_output`。）
   写法提醒（#15 现场）：`.gitignore` 里 `node_modules/` 这种带尾斜杠的模式
   只匹配目录，符号链接逃过忽略。追加忽略项前先确定要盖的是目录还是同名任意条目。
   依赖：无。

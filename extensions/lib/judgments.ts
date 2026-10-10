@@ -20,7 +20,7 @@
  */
 
 import type { TriageRecord } from "./types.ts";
-import type { ClassifierAnswer, ClassifierContext, ClassifierQuestion, ClassifierResult } from "@earendil-works/pi-ai";
+import type { ClassifierAnswer, ClassifierContext, ClassifierQuestion, ClassifierResult, Usage } from "@earendil-works/pi-ai";
 
 export type { ClassifierAnswer };
 
@@ -59,11 +59,27 @@ function parseThreshold(value: string | undefined, fallback: number): number {
 // ---------------------------------------------------------------------------
 // Registry call wrapper: never throws, degrades to a reason string.
 
-export type ClassifyAttempt = { ok: true; answers: Record<string, ClassifierAnswer> } | { ok: false; reason: string };
+/**
+ * What one classifier call cost the orchestrator. Executors bill their own
+ * accounts and their spend is never recorded here; this is pi's own judgment
+ * channel, which is the spend the orchestrator can actually decide to cut.
+ */
+export interface JudgmentUsage {
+	tokens: number;
+	cost: number;
+}
+
+export type ClassifyAttempt = { ok: true; answers: Record<string, ClassifierAnswer>; usage?: JudgmentUsage } | { ok: false; reason: string };
 
 export interface ClassifyRegistry {
 	classify(model: unknown, context: ClassifierContext): Promise<ClassifierResult>;
 	findOfType(type: "classifier", provider: string, id: string): unknown;
+}
+
+/** Token totals and catalog cost, when the service reports them. */
+function usageOf(usage: Usage | undefined): JudgmentUsage | undefined {
+	if (!usage) return undefined;
+	return { tokens: usage.totalTokens, cost: usage.cost.total };
 }
 
 export async function classifyViaRegistry(
@@ -79,7 +95,7 @@ export async function classifyViaRegistry(
 	if (result.stopReason !== "stop") {
 		return { ok: false, reason: result.errorMessage ?? `classifier stopped with "${result.stopReason}"` };
 	}
-	return { ok: true, answers: result.answers };
+	return { ok: true, answers: result.answers, usage: usageOf(result.usage) };
 }
 
 // ---------------------------------------------------------------------------

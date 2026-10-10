@@ -231,6 +231,11 @@ Both are advisory to the model, never a replacement for its judgment, and a
 failed judgment channel degrades to a note — it must never block a dispatch.
 `PI_FLEET_JUDGMENTS=off` disables both.
 
+Both report what they cost: the gate's token and dollar usage rides in the
+dispatch record and in a refusal, so you can see what gating a brief costs
+before you gate another one. That spend is this session's — an executor's spend
+is never captured or attributed, because executors bill their own accounts.
+
 | variable | default | meaning |
 | --- | --- | --- |
 | `PI_FLEET_JUDGMENTS` | `on` | `off` disables gate and triage. |
