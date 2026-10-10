@@ -81,12 +81,14 @@ With `PI_FLEET_PANES=auto` (the default) and pi running inside Herdr
 watch and talk to, instead of a detached process nobody sees:
 
 1. The worktree's Herdr workspace is found from `herdr workspace list`.
-2. One tab per ticket: `herdr tab create --label "fleet: <ticket>" --cwd
-   <worktree> --no-focus`. A further job of the same ticket splits that tab
-   (`herdr pane split`), and past three jobs a new tab opens.
+2. One tab per ticket, split by role: `herdr tab create --label "fleet:
+   <ticket>" --cwd <worktree> --no-focus`. The tab's left column holds executors
+   and stacks each further one downward (past three, a new tab opens); the
+   ticket's reviewer sits right of the first executor and that one pane is kept,
+   so a re-review reads where the first review did.
 3. `herdr agent start <name> --kind codex|claude --pane <id>` starts the real
-   TUI. The name is `fleet-<ticket>-<nonce>`, so a review and a fix round of one
-   ticket never share an agent.
+   TUI. The name is `fleet-<ticket>-<nonce>`, except in the kept review pane,
+   where the standing agent is re-prompted instead of a second one being started.
 4. `herdr agent prompt <name> <task>` delivers the task. The task text points at
    the brief file and states the contract rule: write the JSON into
    `<run-dir>/result.json` and put nothing else in that file.
@@ -124,6 +126,24 @@ herdr worktree create --cwd <repo> --branch fleet/<ticket> --label "fleet: <tick
 
 `herdr worktree open` does the same for a worktree that already exists. A plain
 `git worktree add` works too: the tab then lands in the session's own workspace.
+
+### The review loop
+
+A settled job drives the next step; no model turn sits in the loop. When a job
+ends, the extension harvests it and asks `lib/loop.ts` what comes next:
+
+- implement contract passed → a review is dispatched on the **other** harness, in
+  the ticket's review pane, against the branch the implement contract named.
+- review with blockers → one fix round, its brief assembled from the findings the
+  triage classified as blockers. Style and ignore findings never spend a round.
+- review without blockers → the loop closes and pings you: the branch is yours to
+  merge.
+
+Two caps bound the spend. `PI_FLEET_MAX_FIX_ROUND` stops repair rounds in
+`plan.ts`, and the loop gets six dispatches per ticket per session. Past either,
+the chain halts with a note instead of retrying. A judgment channel that is off
+or unavailable halts the chain rather than inventing a round the model never
+saw. `PI_FLEET_LOOP=off` makes every step yours to dispatch by hand.
 
 ### Completion ping
 
@@ -236,7 +256,9 @@ Environment, read once at load — reload pi to change it.
 | `PI_FLEET_CODEX_BIN` | `codex` | codex binary. |
 | `PI_FLEET_CLAUDE_BIN` | `claude` | claude binary. |
 | `PI_FLEET_HERDR_BIN` | `herdr` | herdr binary used for pane tabs and cleanup. |
-| `PI_FLEET_NOTIFY` | `on` | `off` stops the completion ping through the UI or Herdr. |
+| `PI_FLEET_NOTIFY` | `on` | `off` stops the ping through the UI or the Herdr notification, and with it the loop's closure note. |
+| `PI_FLEET_LOOP` | `on` | `off` hands the review chain back to you: a settled job pings but dispatches nothing. |
+| `PI_FLEET_AGENT_START_MS` | `90000` | How long to wait for an executor TUI to come up before degrading to a detached spawn. |
 | `PI_FLEET_GIT_GUARD` | `on` | `off` stops blocking `git stash`, `git commit --amend`, and force push. |
 | `PI_FLEET_PANES` | `auto` | Run executors as interactive Herdr agents: `auto` = only when `HERDR_ENV=1`, `on` / `off` decide outright. `off` uses the one-shot `codex exec` / `claude -p` argv. |
 
@@ -292,7 +314,8 @@ extensions/
     profiles.ts       executor argv + prompt building (pure)
     plan.ts           dispatch validation and planning (pure)
     contract.ts       result contract validation (pure)
-    panes.ts          Herdr pane mode: tab topology, run.sh text, cleanup decision (pure)
+    panes.ts          Herdr pane mode: pane placement by role, cleanup decision (pure)
+    loop.ts           what a settled job triggers next: implement, review, fix (pure)
     gitguard.ts       command screening for the three fleet-breaking git calls (pure)
     frontier.ts       ticket-graph frontier computation (pure)
     judgments.ts      Jev gate and triage: question catalog, interpretation, thresholds (pure)

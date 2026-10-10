@@ -24,8 +24,9 @@ interpretation functions over canned answers.
 - Pure modules own the decisions, the wiring owns the I/O: `plan.ts` (dispatch
   validation and planning), `contract.ts` (contract validation), `frontier.ts`
   (ticket-graph frontier), `judgments.ts` (question catalog and interpretation),
-  `gitguard.ts` (command screening), `panes.ts` (Herdr topology, run.sh text,
-  cleanup decisions) stay free of fs, spawning, and pi imports so
+  `gitguard.ts` (command screening), `panes.ts` (Herdr topology: pane placement by
+  role, cleanup decisions), `loop.ts` (what a settled job triggers next) stay
+  free of fs, spawning, and pi imports so
   they test without a session or a model call. `supervise.ts` is the only module
   that spawns, and the only one that calls the herdr CLI.
 
@@ -44,15 +45,24 @@ interpretation functions over canned answers.
   Thresholds live in code (settings), never in the model's discretion.
 - **Completion pings are advisory too.** A ping reports the exit code and points
   at the harvest; it never states that the contract passed. An undeliverable
-  ping is dropped, and exactly one channel fires per job: the pane's own script
-  when the run lives in a pane, pi otherwise.
+  ping is dropped, and exactly one channel fires per job: the agent's own wait
+  process when the run lives in a pane, pi otherwise.
 - **The disk is the source of truth.** Jobs survive the session; harvests of
   inherited jobs settle from disk evidence. Never kill by recorded pid without
   the in-memory child handle: after a session is gone, the pid may name a
   recycled process.
 - **Fix rounds are capped in code.** Past the cap the dispatch refuses and the
-  model escalates. A fix-round dispatch skips the brief gate (it narrows an
-  already-gated brief).
+  loop halts with a note instead of retrying; a human decides from there. A
+  fix-round dispatch skips the brief gate (it narrows an already-gated brief).
+- **The review loop is event-driven and bounded twice.** A settled job triggers
+  the next step through `lib/loop.ts`; no model turn sits in the chain. Only a
+  passing contract advances it, only blocker findings spend a fix round, and both
+  the fix-round cap and the per-ticket dispatch budget stop it. The chain calls
+  the same tools a model calls, so the gate, the triage, and the once-per-job
+  ledger entry are never a second implementation.
+- **A ticket's tab is split by role.** Executors stack in the left column and
+  reviewers occupy the kept right pane; placement is the pure
+  `planPaneAction` in `panes.ts`, never a job counter in `supervise.ts`.
 - **One harvest reports once.** Re-harvesting a settled job must not re-run
   the triage or duplicate the ledger entry.
 - **Panes stay open until cleanup says so.** An interactive job is proven by the

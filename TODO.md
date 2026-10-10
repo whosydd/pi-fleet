@@ -77,7 +77,28 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
     `/tmp/p23-brief.md`（重启会没，下文四项要求照旧重写即可）。
 
 ## P1 — 编排闭环
-- [ ] **#28 票内 pane 布局：左执行、右评审**（本仓库）
+
+- [ ] **#30 契约的 ticket 与作业的 ticket 不比对**（本仓库）
+  现场：票号 `23-gitignore`，codex 契约写 `ticket: "#23"`，`validateContract` 只查
+  「非空字符串」，照样 `contract_complete`。编排者据契约判断「这张票做完了」时读的
+  是执行器自己抄的字符串。
+  范围：`contract.ts` 增加 ticket 一致性判定（规范化后比较：去 `#`、去空白、大小写
+  不敏感），不一致 → `contract_failed`，错误文案点明两个值。判定留在纯函数里，
+  `validateContract` 签名增加 expected ticket。
+  验收：`test/contract.test.ts` 覆盖一致/`#23` vs `23`/完全不同三例；真跑一次确认
+  误伤率为零（执行器爱写 `#42`，这不是失败）。
+  依赖：无。
+
+- [ ] **#31 triage 文案里 style 计数可能是负数**（本仓库）
+  现场：真 findings 第一轮 triage 输出「1 blocker、6 待人工确认」，style 计数显示
+  `-1`。算式是 `total - blockers - uncertain`，而 uncertain 与 blocker 可以重叠
+  （一个 verdict 既 blocker 又低置信），于是被减两次。
+  范围：`extensions/index.ts` 的 triageNote 计数改成按互斥集合算，或直接分别报
+  「blockers / style / ignore / uncertain」四个数不相加。
+  验收：把算式抽成 `judgments.ts` 的纯函数 `summarizeTriage(records)`，测试覆盖
+  blocker∩uncertain 重叠例。
+  依赖：无。
+- [x] **#28 票内 pane 布局：左执行、右评审**（本仓库）—— 已落地 `29baa9a`
   范围：tab 仍按票分。票 tab 左侧是执行区（codex，可按并发 split 多个 pane），
   右侧固定一格评审区（claude，一轮评审一个 pane，跨 fix 轮不关，人随时能看）。
   `panes.ts` 新增纯函数 `ticketLayout(jobs)`：输入票内活跃 job（角色+序号），
@@ -87,7 +108,7 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   断言 split 方向与 pane 归属。
   依赖：无（#29 依赖本项的评审 pane 复用）。
 
-- [ ] **#29 票内自动评审循环：implement → review → fix → …**（本仓库）
+- [x] **#29 票内自动评审循环：implement → review → fix → …**（本仓库）—— 已落地 `51441e8` + `20bc2ac` + `3e55cd8`
   进展：决策已落地 `extensions/lib/loop.ts`（纯函数 `nextStep` + `blockerFindings`，
   `test/loop.test.ts` 7 项全绿）。未接的是接线：`index.ts` 的 `onSettled` 目前只做 ping，
   需要在那里 harvest → nextStep → 自动派下一步；review job 的 base 取自 implement 契约的
@@ -105,6 +126,15 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   让编排模型逐条读散文。通道失败或读数缺失 → 降级 note + ping 人，绝不因此阻塞循环
   （invariant：判断永远是 advisory and degradable）。
   依赖：#28。
+  落地证据（stand-in 执行器，零额度）：派一张 implement 票 → codex 契约过 →
+  链**自己**派了 claude/review（模型没参与，日志里两个 job，第二个 id 是链造的）→
+  评审契约过 → 链收敛并 ping「loop closed」。帽由 `PI_FLEET_MAX_FIX_ROUND`（plan.ts）
+  与每票 6 次链内派发（index.ts `CHAIN_DISPATCH_BUDGET`）两道兜住；
+  `PI_FLEET_LOOP=off` 交回手动。
+  **这轮抓出的 P0**：`settle()` 先读 result.json，claude 一次性任务从不写那个文件
+  （契约在 stdout 信封里），ENOENT 的 catch 提前返回，导致 `parseClaudeStdout`
+  分支不可达——过去任何一次 claude spawn 都不可能通过契约校验。`20bc2ac` 修，
+  `test/supervise.test.ts` 补回归（#15 的 claude 腿此前从未真验，正是缺这条测试）。
 
 - [ ] **#16 frontier 暴露给模型**（本仓库）
   范围：`FleetStatus` 增加可选 `tickets` 参数，返回 `ready` / `waiting` / `errors`。
@@ -250,7 +280,21 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 ## 下次开工入口
 
-#15 的四条腿已过三条（worktree + gate + 跨会话收割），执行器腿等 tierflow 额度
-恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。#22、#24、#26、#17
-已落地。额度未恢复时做 #25 或 #23 剩下的 gate usage 一项（#23 的 `.gitignore`
-项先留着，它是 #15 的试金石票）。#16 继续等 #15 收尾。
+#15 四条腿全过（worktree、gate 正反、跨会话收割、codex 交互 + claude 契约）。
+#28 布局与 #29 循环已落地并用 stand-in 验过。剩下的按顺序：
+
+1. **合并票分支**：`fleet/p23-gitignore`（codex 实现，1 commit 6 文件 +205/−6，
+   基线 `c7a843d`，工作树 `npm run check` 52 全绿）。main 已走到 77 测试，
+   `plan.ts`/`index.ts`/`README.md` 两边都动过 → 真冲突，合并后必须在合并树重跑
+   `npm run check`。顺手改掉 `extensions/lib/preflight.ts` 注释里「run dir 是相对
+   路径」那句（`48d7fe3` 后已不成立）。合完 #23 的 `.gitignore` 项才算关闭。
+2. **真执行器跑一轮链**：现成输入是这次真评审的两条 findings（preflight 的 catch
+   分支无测试；#23 三项只交付了 `.gitignore` 一项）。看链能否自动起 fix 轮。
+3. **#30 / #31**：都是这轮现场抓出来的小口，纯函数改动，无需额度。
+4. #16 frontier 暴露给模型（等 #15 收尾——现已可动）。#25 worktree 依赖准备。
+   #23 剩 gate 的 classify usage 记账。
+
+现场遗留：workspace `w29` = worktree `/Users/gy/Code/pi/.worktrees/p23`，
+tab `w29:t3`（codex implement，idle 等你读）、`w29:t5`（claude review，idle）。
+`FleetCleanup` 归你决定何时关。新票的 worktree 一律 `herdr worktree create`，
+别再手摆路径（p23 那个在 pi 仓库树内，是遗产）。
