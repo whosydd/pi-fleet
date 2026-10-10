@@ -14,12 +14,19 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 - `claude 2.1.287`：`-p --output-format json --json-schema` 出 `structured_output`
 - Jev 通道：`typesafe/jev-latest` 正常；`opencode/jev-1.13` 402 欠费、
   `jev-1.13-free` 451 不可用
+- 两个执行器共用同一个 tierflow token（`~/.codex/config.toml` 的
+  `experimental_bearer_token` 与 `~/.claude/settings.json` 的
+  `ANTHROPIC_AUTH_TOKEN` 同值）。`codex login status` 报 Not logged in 是噪音：
+  该配置不走 ChatGPT 登录。
+- **额度阻塞**：tierflow 返回 `403 订阅额度不足: subscription quota
+  insufficient, bucket=basic`（codex need=6889、claude need=6272）。codex 与
+  claude 同时不可用，#15 的执行器腿需要额度恢复后补跑。
 
 ---
 
 ## P0 — 前置验证
 
-- [ ] **#15 真票端到端验证**（本仓库）
+- [ ] **#15 真票端到端验证**（本仓库）—— 部分完成，剩执行器腿（额度阻塞）
   范围：选一张真实小票，走 `git worktree add` → `FleetDispatch` → `FleetHarvest`，
   codex 与 claude 各跑一次。
   验收标准：codex 的 `-o/--output-schema` 确实把契约 JSON 写进 `result.json`；
@@ -28,6 +35,24 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   依赖：无。这一项不过，后面所有改动都缺乏回归基线。
   风险：`claude -p` 在用户自己的权限配置下可能拒绝跑测试（pi 不干预权限），届时
   改执行器侧配置，不是 argv。
+
+  2026-10-10 现场（真票 = #23 的 `.gitignore` 项，worktree
+  `/Users/gy/Code/pi/.worktrees/p23`，分支 `fleet/p23-gitignore`，编排会话用
+  `pi -p -e extensions/index.ts` 起）：
+
+  - 已过：worktree 预检、gate（真 brief → entry 0.98 / acceptance 0.85 / scope
+    0.99 → pass，走 pi 自带 registry，无额外凭据）、spawn 与 detached meta.json
+    落盘、跨会话收割（新 session `loadFromDisk` 认出 job，报 failed + exit code +
+    stderr 路径）。
+  - 已修：run-dir 根目录是相对路径，编排者按主仓库解析、执行器按 worktree 解析，
+    codex 0.6 秒退出并报 `Failed to read output schema file ... No such file or
+    directory`。`48d7fe3` 把根目录解析成绝对路径。
+  - 未过（额度）：契约文件真实写入、claude `structured_output` 提取、review triage
+    在真 findings 上的行为。
+  - 额度恢复后要验的第一件事：codex 的 `-o` 能否写在执行器工作区之外（现在 run
+    dir 在编排者仓库的 `.fleet/` 下）。`--output-schema` 读工作区外文件已实测可行。
+    若写不了，改法是 run dir 落进 worktree 或从 stdout 提取契约——`JobMeta` 里的
+    `diskPath` 与 `resultSource` 字段是这条路的遗留，代码目前未使用。
 
 ## P1 — 编排闭环
 
@@ -79,6 +104,21 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 ## P3 — 加固与小项
 
+- [ ] **#24 收割上报执行器的真实死因**（本仓库）
+  范围：claude 非零退出时，`supervise.ts` 目前只报 `executor exited with code
+  1; see stderr.log`，而 stderr.log 是空的，真因在 stdout.log 的 JSON envelope
+  里（`is_error`、`api_error_status`、`terminal_reason`、`result`）。额度 403
+  实测：exit=1 + `api_error_status:403` + `result:"Failed to authenticate..."`。
+  验收标准：执行器因鉴权或额度失败时，harvest 文本直接给出该原因，不让人去翻空文件。
+  依赖：无。#15 现场发现。
+
+- [ ] **#25 worktree 依赖准备**（文档或代码，落点待定）
+  范围：worktree 不带 `node_modules`，执行器跑不了 `npm run check`。当前手工
+  `ln -s` 可行，但仓库 `.gitignore` 写的是 `node_modules/`（带斜杠只匹配目录），
+  符号链接会被 `git status` 报成未跟踪，执行器可能把它提交进去。
+  验收标准：派发到 Node 项目的 worktree 里，依赖就绪且 `git status` 干净。
+  依赖：无。#15 现场发现。
+
 - [ ] **#22 pi 侧危险 git 拦截**（本仓库）
   范围：`user_bash` handler 拦 `git stash`、`git commit --amend`、force push。
   依据：上游文档记录的事故现场——`refs/stash` 跨 worktree 共享，worktree 隔离不住它。
@@ -89,6 +129,10 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   gate 的 classify usage 附进 dispatch 结果；`test/plan.test.ts` 补 claude implement
   的 argv 正向断言（`-p`、`--output-format`、`--json-schema`）；`.fleet/` 在首次
   派发时自动写入项目 `.gitignore`。
+  另记一项不一致：`profiles.ts` 的注释说 codex 走 `--json` 向 stdout 流事件，
+  argv 里实际没有 `--json`，README 也没写。改代码或改注释，不能两边都留着。
+  写法提醒（#15 现场）：`.gitignore` 里 `node_modules/` 这种带尾斜杠的模式
+  只匹配目录，符号链接逃过忽略。追加忽略项前先确定要盖的是目录还是同名任意条目。
   依赖：无。
 
 ---
@@ -104,4 +148,7 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 ## 下次开工入口
 
-从 **#15** 开始。它决定 #16/#17 的改动是否安全，也决定 #20 的规则该写什么。
+#15 的四条腿已过三条（worktree + gate + 跨会话收割），执行器腿等 tierflow 额度
+恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。额度未恢复时做 #24
+和 #25：两项都无依赖，且都是 #15 现场抱出来的真问题。#16 和 #17 继续等 #15
+收尾。

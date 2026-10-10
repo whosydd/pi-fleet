@@ -13,8 +13,8 @@ interpretation functions over canned answers.
 
 ## Roadmap
 
-- Unfinished work lives in `TODO.md`. The next session starts at P0 (#15, a
-  real-ticket end-to-end run); #16 and #17 depend on it.
+- Unfinished work lives in `TODO.md`. Its "下次开工入口" section names the entry
+  point for the current session; do not duplicate that state here.
 
 ## Layout
 
