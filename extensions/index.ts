@@ -55,6 +55,8 @@ import {
 	classifyViaRegistry,
 	interpretGate,
 	interpretTriage,
+	summarizeTriage,
+	uncertainIndices,
 	readJudgmentSettings,
 	type ClassifyRegistry,
 	type TriageFinding,
@@ -372,11 +374,11 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			if (meta.triage) {
 				// Cached from a previous harvest: report it again without re-judging.
 				triageRecords = meta.triage;
-				const blockers = meta.triage.filter((record) => record.choice === "blocker");
-				const uncertain = meta.triage.filter((record) => record.uncertain);
+				const tally = summarizeTriage(meta.triage);
+				const uncertain = uncertainIndices(meta.triage);
 				triageNote =
-					`\n\nTriage (cached): ${blockers.length} blocker(s), ${meta.triage.length - blockers.length - uncertain.length} style/ignore, ${uncertain.length} uncertain.` +
-					(uncertain.length > 0 ? ` Read these yourself before acting: ${uncertain.map((record) => `#${record.index}`).join(", ")}.` : "");
+					`\n\nTriage (cached): ${tally.blockers} blocker(s), ${tally.style} style, ${tally.ignore} ignore, ${tally.uncertain} uncertain.` +
+					(uncertain.length > 0 ? ` Read these yourself before acting: ${uncertain.map((index) => `#${index}`).join(", ")}.` : "");
 			} else if (
 				judgeSettings.enabled &&
 				meta.taskKind === "review" &&
@@ -406,14 +408,15 @@ export default function fleetExtension(pi: ExtensionAPI) {
 							meta.triage = triageRecords;
 							supervisor.persist(meta);
 							const blockers = verdicts.filter((verdict) => verdict.choice === "blocker");
-							const uncertain = verdicts.filter((verdict) => verdict.uncertain);
+							const tally = summarizeTriage(triageRecords ?? []);
+							const uncertain = uncertainIndices(triageRecords ?? []);
 							triageNote =
-								`\n\nTriage: ${blockers.length} blocker(s), ${verdicts.length - blockers.length - uncertain.length} style/ignore, ${uncertain.length} uncertain.` +
+								`\n\nTriage: ${tally.blockers} blocker(s), ${tally.style} style, ${tally.ignore} ignore, ${tally.uncertain} uncertain.` +
 								(blockers.length > 0
 									? ` Only blockers consume a fix round: ${blockers.map((verdict) => `#${verdict.index} (${findings[verdict.index].axis})`).join(", ")}.`
 									: "") +
 								(uncertain.length > 0
-									? ` Read these yourself before acting: ${uncertain.map((verdict) => `#${verdict.index}`).join(", ")}.`
+									? ` Read these yourself before acting: ${uncertain.map((index) => `#${index}`).join(", ")}.`
 									: "");
 						} else {
 							triageNote = `\n\nTriage unavailable (${attempt.reason}); read the findings yourself.`;

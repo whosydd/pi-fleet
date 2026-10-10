@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-	buildGateContext,
-	buildTriageContext,
-	interpretGate,
-	interpretTriage,
-	readJudgmentSettings,
-	type ClassifierAnswer,
-} from "../extensions/lib/judgments.ts";
+import { buildGateContext, buildTriageContext, interpretGate, interpretTriage, readJudgmentSettings, summarizeTriage, type ClassifierAnswer, uncertainIndices } from "../extensions/lib/judgments.ts";
 
 const bool = (probability: number): ClassifierAnswer => ({ type: "bool", probability });
 const choice = (choice: string, confidence: number): ClassifierAnswer => ({ type: "choice", choice, probabilities: {}, confidence });
@@ -108,4 +101,20 @@ test("judgment settings: defaults, overrides, and the off switch", () => {
 	assert.equal(overridden.modelId, "jev-1.13");
 	assert.equal(overridden.gateFloor, 0.8);
 	assert.equal(overridden.triageConfidence, 0.8);
+});
+
+test("triage counts partition the findings, and uncertain is a separate axis", () => {
+	const records = [
+		{ index: 0, axis: "standards" as const, label: "a", choice: "blocker", confidence: 0.9, uncertain: false },
+		// A blocker the classifier was unsure about: it belongs to the blocker
+		// count and to the uncertain count, never to a subtraction of the other.
+		{ index: 1, axis: "spec" as const, label: "b", choice: "blocker", confidence: 0.4, uncertain: true },
+		{ index: 2, axis: "standards" as const, label: "c", choice: "style", confidence: 0.85, uncertain: false },
+		{ index: 3, axis: "spec" as const, label: "d", choice: "ignore", confidence: 0.9, uncertain: false },
+	];
+	const tally = summarizeTriage(records);
+	assert.deepEqual(tally, { blockers: 2, style: 1, ignore: 1, uncertain: 1 });
+	assert.equal(tally.blockers + tally.style + tally.ignore, records.length);
+	assert.deepEqual(uncertainIndices(records), [1]);
+	assert.deepEqual(summarizeTriage([]), { blockers: 0, style: 0, ignore: 0, uncertain: 0 });
 });

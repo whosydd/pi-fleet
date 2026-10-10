@@ -19,6 +19,7 @@
  * call, backticked state paths.
  */
 
+import type { TriageRecord } from "./types.ts";
 import type { ClassifierAnswer, ClassifierContext, ClassifierQuestion, ClassifierResult } from "@earendil-works/pi-ai";
 
 export type { ClassifierAnswer };
@@ -202,4 +203,36 @@ export function interpretTriage(
 		verdicts.push({ index, choice, confidence, uncertain: confidence < confidenceFloor });
 	}
 	return verdicts;
+}
+
+/** The counts a harvest note reports about a triage. */
+export interface TriageSummary {
+	blockers: number;
+	style: number;
+	ignore: number;
+	uncertain: number;
+}
+
+/**
+ * Count a triage for the harvest note.
+ *
+ * The arithmetic it replaces was `total - blockers - uncertain`, which charged a
+ * verdict that is both a blocker and low-confidence twice and printed a negative
+ * style count (seen live: "1 blocker, style -1"). Blocker, style, and ignore
+ * partition the findings and sum to the total; uncertain crosses that partition,
+ * so it is its own number and never a subtraction.
+ */
+export function summarizeTriage(records: TriageRecord[]): TriageSummary {
+	const count = (choice: string) => records.filter((record) => record.choice === choice).length;
+	return {
+		blockers: count("blocker"),
+		style: count("style"),
+		ignore: count("ignore"),
+		uncertain: records.filter((record) => record.uncertain).length,
+	};
+}
+
+/** The findings a human should read before the loop acts on them. */
+export function uncertainIndices(records: TriageRecord[]): number[] {
+	return records.filter((record) => record.uncertain).map((record) => record.index);
 }
