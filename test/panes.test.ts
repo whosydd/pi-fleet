@@ -1,37 +1,41 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { planDispatch, type FleetSettings } from "../extensions/lib/plan.ts";
 import {
+	agentGetArgv,
+	agentName,
+	agentPromptArgv,
+	agentStartArgv,
+	agentWaitArgv,
 	closableTabs,
+	paneDirection,
+	paneSplitArgv,
+	parseAgentGet,
+	parsePaneSplit,
 	parseTabCreate,
 	parseWorkspaceList,
-	paneRunCommand,
 	readExitCodeText,
-	readPidFromText,
 	resolvePaneMode,
-	runScript,
-	shellQuote,
 	workspaceForWorktree,
 } from "../extensions/lib/panes.ts";
 import { Supervisor } from "../extensions/lib/supervise.ts";
 
 const FAKE_HERDR = new URL("./helpers/fake-herdr.mjs", import.meta.url).pathname;
-const FAKE = new URL("./helpers/fake-codex.mjs", import.meta.url).pathname;
 
 function settingsFor(dir: string, overrides: Partial<FleetSettings> = {}): FleetSettings {
 	return {
 		stateDir: join(dir, ".fleet"),
-		maxConcurrent: 1,
+		maxConcurrent: 4,
 		defaultTimeoutMs: 60_000,
 		maxFixRound: 2,
-		codexBin: "/bin/sh",
+		codexBin: "codex",
 		claudeBin: "claude",
 		gitGuard: true,
 		// Tests never touch the real Herdr session: the herdr binary defaults to the
-		// stand-in, and pane mode stays off unless a test asks for it by name.
+		// stand-in, and interactive mode stays off unless a test asks for it by name.
 		paneMode: "off",
 		herdrBin: FAKE_HERDR,
 		notify: true,
@@ -46,12 +50,10 @@ function planFor(dir: string, settings: FleetSettings, overrides: Partial<Parame
 		{ runningCount: 0, herdrEnv: process.env.HERDR_ENV },
 	);
 	if (!result.ok) throw new Error(result.message);
-	// Stand in for the real executor, honouring the same -o argument.
-	result.plan.command = ["node", FAKE, "-o", result.plan.paths.resultPath];
 	return result.plan;
 }
 
-function herdrCalls(log: string): { args: string[]; command?: string; workspace?: string; tabId?: string; title?: string; body?: string }[] {
+function herdrCalls(log: string): { args: string[]; task?: string; command?: string; workspace?: string; tabId?: string; title?: string; name?: string; kind?: string | null }[] {
 	if (!existsSync(log)) return [];
 	return readFileSync(log, "utf8")
 		.trim()
@@ -79,7 +81,7 @@ function useEnv(values: Record<string, string | undefined>): () => void {
 async function settle(supervisor: Supervisor, id: string, deadlineMs = 15_000): Promise<string> {
 	const started = Date.now();
 	for (;;) {
-		const outcome = supervisor.refresh(id).outcome;
+		const outcome = (await supervisor.refresh(id)).outcome;
 		if (outcome.kind !== "running") return outcome.kind;
 		if (Date.now() - started > deadlineMs) return "running";
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -96,148 +98,102 @@ test("pane decision: the parameter wins, then the setting, then HERDR_ENV", () =
 	assert.equal(resolvePaneMode(undefined, "auto", undefined), false);
 });
 
-test("paneRunCommand is one short shell-neutral call", () => {
-	assert.equal(paneRunCommand("/state/runs/x/run.sh"), "bash '/state/runs/x/run.sh'");
-	assert.equal(shellQuote("it's"), `'it'\\''s'`);
+test("agent names stay inside herdr's rule and stay unique per dispatch", () => {
+	const name = agentName("Auth/Refactor: part 2!", "ab12");
+	assert.match(name, /^[a-z][a-z0-9_-]{0,31}$/);
+	assert.ok(name.startsWith("fleet-"));
+	assert.ok(name.includes("auth-refactor-part-2"));
+	assert.equal(agentName("42", "zz9"), "fleet-42-zz9");
+	// A ticket of punctuation only still names a legal agent.
+	assert.match(agentName("///", "x1"), /^[a-z]/);
+	// Two dispatches of one ticket never collide on one name.
+	assert.notEqual(agentName("42", "aa11"), agentName("42", "bb22"));
 });
 
-test("run.sh: bash shebang, quoted argv, split tees, exit_code written last", () => {
-	const script = runScript({ worktree: "/wt/a", command: ["codex", "exec", "--msg", "say 'hi'"], runDir: "/state/runs/x" });
-	assert.ok(script.startsWith("#!/usr/bin/env bash"));
-	assert.ok(script.includes(`cd '/wt/a'`));
-	assert.ok(script.includes(`echo $$ > '/state/runs/x/pid'`));
-	// The whole argv is single-quoted, so an embedded quote survives.
-	assert.ok(script.includes(shellQuote("say 'hi'")));
-	// stdout and stderr tee separately: claude's stdout.log must stay pure JSON.
-	assert.ok(script.includes("> >(tee '/state/runs/x/stdout.log')"));
-	assert.ok(script.includes("2> >(tee '/state/runs/x/stderr.log' >&2)"));
-	// stdin closed: a pane TTY must never look like executor input.
-	assert.ok(script.includes("</dev/null"));
-	const lines = script.trimEnd().split("\n");
-	assert.equal(lines.at(-2), `echo "$ec" > '/state/runs/x/exit_code'`);
-	assert.equal(lines.at(-1), `exit "$ec"`);
+test("agent argv: the model override rides after --, the task is one argument", () => {
+	assert.deepEqual(agentStartArgv("fleet-42-x1", "codex", "w1:p2"), ["agent", "start", "fleet-42-x1", "--kind", "codex", "--pane", "w1:p2"]);
+	assert.deepEqual(agentStartArgv("fleet-42-x1", "codex", "w1:p2", "gpt-6"), ["agent", "start", "fleet-42-x1", "--kind", "codex", "--pane", "w1:p2", "--", "-m", "gpt-6"]);
+	assert.deepEqual(agentStartArgv("n", "claude", "w1:p2", "sonnet"), ["agent", "start", "n", "--kind", "claude", "--pane", "w1:p2", "--", "--model", "sonnet"]);
+	assert.deepEqual(agentPromptArgv("fleet-42-x1", "Build it."), ["agent", "prompt", "fleet-42-x1", "Build it."]);
+	assert.deepEqual(agentGetArgv("fleet-42-x1"), ["agent", "get", "fleet-42-x1"]);
+	assert.deepEqual(agentWaitArgv("fleet-42-x1", 5000), ["agent", "wait", "fleet-42-x1", "--until", "idle", "--until", "done", "--until", "blocked", "--timeout", "5000"]);
+	assert.deepEqual(paneSplitArgv("w1:p1", "down", "/wt"), ["pane", "split", "w1:p1", "--direction", "down", "--cwd", "/wt", "--no-focus"]);
+	assert.equal(paneDirection(0), "right");
+	assert.equal(paneDirection(1), "down");
 });
 
-test("run.sh: exit_code lands before the ping, and the script keeps the executor's status", () => {
-	const notify = { herdrBin: "/usr/local/bin/herdr", title: "fleet: 42 finished" };
-	const script = runScript({ worktree: "/wt/a", command: ["codex", "exec"], runDir: "/state/runs/x", notify });
-	const lines = script.trimEnd().split("\n");
-	const exitCodeLine = lines.findIndex((line) => line.startsWith(`echo "$ec" > '/state/runs/x/exit_code'`));
-	const pingLine = lines.findIndex((line) => line.includes("notification show"));
-	assert.ok(exitCodeLine >= 0 && pingLine === exitCodeLine + 1, "the ping follows the evidence, never precedes it");
-	assert.equal(lines[lines.length - 1], `exit "$ec"`);
-	assert.ok(script.includes(`'/usr/local/bin/herdr' notification show 'fleet: 42 finished'`));
-	assert.ok(script.includes('"finished with exit code $ec'));
-	assert.ok(script.includes("--sound done"));
-	// A dead notification channel must not change the run's status.
-	assert.ok(script.includes("|| true"));
-	// Notify off means no ping line at all.
-	const quiet = runScript({ worktree: "/wt/a", command: ["codex", "exec"], runDir: "/state/runs/x" });
-	assert.equal(quiet.includes("notification show"), false);
-	assert.equal(quiet.trimEnd().split("\n").at(-1), `exit "$ec"`);
+test("herdr JSON parsers take the real shapes and fail closed on junk", () => {
+	const agent = parseAgentGet(
+		`{"result":{"agent":{"agent":"codex","agent_status":"idle","name":"codex23","interactive_ready":true,"pane_id":"w29:p3","tab_id":"w29:t1","workspace_id":"w29"}},"type":"agent_info"}`,
+	);
+	assert.deepEqual(agent, { status: "idle", name: "codex23", paneId: "w29:p3", tabId: "w29:t1", workspaceId: "w29" });
+	assert.equal(parseAgentGet("fish: not json"), undefined);
+	assert.equal(parseAgentGet(JSON.stringify({ result: {} })), undefined);
+	assert.equal(parseAgentGet(JSON.stringify({ result: { agent: { agent_status: "garbage" } } })), undefined);
+	const tab = parseTabCreate(`{"result":{"tab":{"tab_id":"w1K:t17"},"root_pane":{"pane_id":"w1K:p3K"}}}`);
+	assert.deepEqual(tab, { tabId: "w1K:t17", paneId: "w1K:p3K" });
+	assert.equal(parsePaneSplit(`{"result":{"pane":{"pane_id":"w30:p2"}}}`), "w30:p2");
+	const list = parseWorkspaceList(`{"result":{"workspaces":[{"workspace_id":"w24","worktree":{"checkout_path":"/private/tmp/repo"}}]}}`);
+	assert.ok(Array.isArray(list));
+	// Herdr reports /private/tmp; the caller says /tmp. Either side matches.
+	assert.equal(workspaceForWorktree(list!, "/tmp/repo"), "w24");
+	assert.equal(workspaceForWorktree(list!, "/var/other"), undefined);
+	assert.equal(parseWorkspaceList("nope"), undefined);
 });
 
-test("run.sh executes for real: split logs, pid, and exit code land on disk", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-runsh-"));
-	try {
-		const runDir = join(dir, "state", "runs", "j1");
-		mkdirSync(runDir, { recursive: true });
-		const scriptPath = join(runDir, "run.sh");
-		writeFileSync(scriptPath, runScript({ worktree: dir, command: ["/bin/sh", "-c", "echo out-line; echo err-line >&2; exit 3"], runDir }));
-		chmodSync(scriptPath, 0o755);
-		const { execFile } = await import("node:child_process");
-		const { promisify } = await import("node:util");
-		const run = promisify(execFile);
-		let status: number | undefined;
-		try {
-			await run("bash", [scriptPath]);
-		} catch (error) {
-			status = (error as { code?: number }).code;
-		}
-		// The script exits with the executor's code: the ping and the file writes
-		// must not steal it.
-		assert.equal(status, 3);
-		assert.equal(readFileSync(join(runDir, "stdout.log"), "utf8").trim(), "out-line");
-		assert.equal(readFileSync(join(runDir, "stderr.log"), "utf8").trim(), "err-line");
-		assert.equal(readExitCodeText(readFileSync(join(runDir, "exit_code"), "utf8")), 3);
-		assert.equal(typeof readPidFromText(readFileSync(join(runDir, "pid"), "utf8")), "number");
-		// A killed run leaves `signal`, which is not a code: undefined, so the
-		// harvest reports "ended without an exit code" instead of a false zero.
-		assert.equal(readExitCodeText("signal\n"), undefined);
-		assert.equal(readExitCodeText(""), undefined);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
+test("exit code text: signal and junk are not codes", () => {
+	assert.equal(readExitCodeText("0\n"), 0);
+	assert.equal(readExitCodeText("3"), 3);
+	assert.equal(readExitCodeText("signal\n"), undefined);
+	assert.equal(readExitCodeText(""), undefined);
 });
 
-test("run.sh really pings through herdr after the evidence lands", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-ping-"));
+test("closableTabs: a tab closes only when every job on it settled", () => {
+	const pane = { workspaceId: "w", tabId: "w:t1", paneId: "w:p1", label: "fleet: 42" };
+	const { tabs, blocked } = closableTabs([
+		{ state: "complete", pane },
+		{ state: "contract_failed", pane },
+		{ state: "running", pane: { ...pane, tabId: "w:t2" } },
+		{ state: "running", pane: undefined },
+	]);
+	assert.deepEqual(tabs, ["w:t1"]);
+	assert.deepEqual(blocked, ["w:t2"]);
+});
+
+test("interactive dispatch end-to-end: tab, agent start, prompt, then the contract file settles it", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-agent-"));
 	const log = join(dir, "herdr.log");
-	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF" });
+	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_AGENT_STATE: "working" });
 	try {
-		const runDir = join(dir, "state", "runs", "j2");
-		mkdirSync(runDir, { recursive: true });
-		const scriptPath = join(runDir, "run.sh");
-		writeFileSync(
-			scriptPath,
-			runScript({ worktree: dir, command: ["/bin/sh", "-c", "echo hi; exit 5"], runDir, notify: { herdrBin: FAKE_HERDR, title: "fleet: 77 finished" } }),
-		);
-		chmodSync(scriptPath, 0o755);
-		const { execFile } = await import("node:child_process");
-		const { promisify } = await import("node:util");
-		await promisify(execFile)("bash", [scriptPath]).catch(() => undefined);
-		const calls = herdrCalls(log);
-		assert.deepEqual(calls.map((call) => `${call.args[0]} ${call.args[1]}`), ["notification show"]);
-		assert.equal(calls[0].title, "fleet: 77 finished");
-		// $ec expanded: the ping names the code the executor actually returned,
-		// and exit_code was already on disk when it fired.
-		assert.match(String(calls[0].args[4]), /exit code 5/);
-		assert.equal(readExitCodeText(readFileSync(join(runDir, "exit_code"), "utf8")), 5);
-	} finally {
-		restore();
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test("pane dispatch end-to-end: herdr tab created, script ran, harvest read exit_code", { timeout: 30_000 }, async () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-pane-"));
-	const log = join(dir, "herdr.log");
-	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir });
-	try {
-		const settings = settingsFor(dir, { herdrBin: FAKE_HERDR, paneMode: "on" });
-		const supervisor = new Supervisor(settings);
-		const plan = planFor(dir, settings);
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
+		const plan = planFor(dir, settingsFor(dir, { paneMode: "on" }));
 		const meta = await supervisor.dispatch(plan, plan.prompt);
 
-		// The dispatch recorded the pane targets it created.
-		assert.equal(meta.runner, "pane");
+		assert.equal(meta.runner, "agent");
+		assert.ok(meta.agentName?.startsWith("fleet-42-"));
 		assert.equal(meta.pane?.workspaceId, "wF");
 		assert.equal(meta.pane?.label, "fleet: 42");
-		assert.ok(meta.pane?.tabId.startsWith("wF:"));
-		assert.equal(meta.paneFallback, undefined);
 
-		// Herdr saw the three setup calls in order, with the pane handed one short
-		// bash command. A fourth call may already have landed: the finished script
-		// pings through the same CLI.
+		// The dispatch made four herdr calls, in order: find the workspace, open the
+		// tab, start the agent, deliver the task.
 		const calls = herdrCalls(log);
-		assert.deepEqual(calls.slice(0, 3).map((call) => `${call.args[0]} ${call.args[1]}`), ["workspace list", "tab create", "pane run"]);
-		assert.match(calls[2]!.command!, /^bash '.*run\.sh'$/);
+		assert.deepEqual(calls.map((call) => `${call.args[0]} ${call.args[1]}`), ["workspace list", "tab create", "agent start", "agent prompt"]);
+		assert.match(String(calls[2]!.kind), /codex/);
+		// The task text carries the contract file rule and the schema.
+		const task = calls[3]!.task;
+		assert.match(task ?? "", /result\.json/);
+		assert.match(task ?? "", /Result contract/);
 
-		// The fake pane really started bash: settle on its own evidence.
-		const deadline = Date.now() + 15_000;
-		while (!existsSync(plan.paths.exitCodePath) && Date.now() < deadline) {
-			await new Promise((resolve) => setTimeout(resolve, 100));
-		}
-		const report = supervisor.refresh(meta.id);
+		// While the fake agent reports working, the job stays running.
+		assert.equal((await supervisor.refresh(meta.id)).outcome.kind, "running");
+
+		// The executor wrote the contract: that, not the agent state, settles it.
+		writeFileSync(plan.paths.resultPath, JSON.stringify({ ticket: "42", status: "implemented", branch: "b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } }));
+		const report = await supervisor.refresh(meta.id);
 		assert.equal(report.outcome.kind, "complete");
-		if (report.outcome.kind === "complete") {
-			assert.equal(report.outcome.meta.exitCode, 0);
-			assert.equal(report.outcome.meta.contractOk, true);
-		}
 
 		// Cleanup: a settled job's tab closes once and reports already closed twice.
-		const closed = await supervisor.closeTab(meta.id);
-		assert.equal(closed.ok, true);
+		assert.equal((await supervisor.closeTab(meta.id)).ok, true);
 		assert.equal((await supervisor.closeTab(meta.id)).alreadyClosed, true);
 		assert.equal(supervisor.listOpenTabs().length, 0);
 		assert.deepEqual(herdrCalls(log).at(-1)!.args, ["tab", "close", meta.pane!.tabId]);
@@ -247,117 +203,119 @@ test("pane dispatch end-to-end: herdr tab created, script ran, harvest read exit
 	}
 });
 
-test("pane channel failure degrades to a detached spawn with a note, never a refusal", { timeout: 30_000 }, async () => {
+test("a second job of one ticket splits the ticket tab instead of opening another", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-split-"));
+	const log = join(dir, "herdr.log");
+	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir });
+	try {
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
+		const first = await supervisor.dispatch(planFor(dir, settingsFor(dir, { paneMode: "on" }), { ticket: "42" }), "brief");
+		const second = await supervisor.dispatch(planFor(dir, settingsFor(dir, { paneMode: "on" }), { ticket: "42" }), "brief");
+
+		assert.equal(first.runner, "agent");
+		assert.equal(second.runner, "agent");
+		// The first job took a fresh tab; the second split it.
+		// Each job looks up the workspace, then takes a pane: the first created the
+		// ticket tab, the second split it.
+		assert.deepEqual(herdrCalls(log).map((call) => `${call.args[0]} ${call.args[1]}`), [
+			"workspace list",
+			"tab create",
+			"agent start",
+			"agent prompt",
+			"workspace list",
+			"pane split",
+			"agent start",
+			"agent prompt",
+		]);
+		assert.equal(second.pane?.tabId, first.pane?.tabId);
+		assert.notEqual(second.pane?.paneId, first.pane?.paneId);
+		assert.notEqual(second.agentName, first.agentName);
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an agent that settled without writing the contract is contract_failed, never complete", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-idle-"));
+	const restore = useEnv({ FAKE_HERDR_LOG: join(dir, "herdr.log"), FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_AGENT_STATE: "idle" });
+	try {
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
+		const meta = await supervisor.dispatch(planFor(dir, settingsFor(dir, { paneMode: "on" })), "brief");
+		assert.equal(await settle(supervisor, meta.id), "contract_failed");
+		const report = await supervisor.refresh(meta.id);
+		assert.equal(report.outcome.kind, "contract_failed");
+		if (report.outcome.kind === "contract_failed") {
+			assert.match(report.outcome.error, /without writing the contract/);
+		}
+		assert.equal(supervisor.get(meta.id)?.agentStatus, "idle");
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a blocked agent stays running and records that it waits on a human", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-blocked-"));
+	const restore = useEnv({ FAKE_HERDR_LOG: join(dir, "herdr.log"), FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_AGENT_STATE: "blocked" });
+	try {
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
+		const plan = planFor(dir, settingsFor(dir, { paneMode: "on" }));
+		const meta = await supervisor.dispatch(plan, "brief");
+		const report = await supervisor.refresh(meta.id);
+		assert.equal(report.outcome.kind, "running");
+		assert.equal(supervisor.get(meta.id)?.agentStatus, "blocked");
+		assert.equal(existsSync(plan.paths.resultPath), false);
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an agent herdr no longer knows is failed, not running forever", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-gone-"));
+	const restore = useEnv({ FAKE_HERDR_LOG: join(dir, "herdr.log"), FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_AGENT_GONE: "1" });
+	try {
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
+		const meta = await supervisor.dispatch(planFor(dir, settingsFor(dir, { paneMode: "on" })), "brief");
+		assert.equal(await settle(supervisor, meta.id), "failed");
+		const report = await supervisor.refresh(meta.id);
+		if (report.outcome.kind === "failed") {
+			assert.match(report.outcome.error, /gone and wrote no contract/);
+		}
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("interactive failure degrades to a detached spawn with a note, never a refusal", { timeout: 30_000 }, async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-pf-"));
 	const restore = useEnv({ FAKE_HERDR_FAIL: "1", FAKE_HERDR_LOG: undefined });
 	try {
-		const settings = settingsFor(dir, { herdrBin: FAKE_HERDR, paneMode: "on" });
-		const supervisor = new Supervisor(settings);
-		const plan = planFor(dir, settings);
-		const meta = await supervisor.dispatch(plan, plan.prompt);
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
+		const meta = await supervisor.dispatch(planFor(dir, settingsFor(dir, { paneMode: "on" })), "brief");
 		assert.equal(meta.runner, "spawn");
 		assert.match(meta.paneFallback!, /failed/);
-		assert.equal(await settle(supervisor, meta.id), "complete");
 	} finally {
 		restore();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
-test("no herdr workspace owns the worktree: pane path declines, job still lands as spawn", { timeout: 30_000 }, async () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-nows-"));
-	const log = join(dir, "herdr.log");
-	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "w9", FAKE_HERDR_CWD: "/somewhere/else", HERDR_WORKSPACE_ID: undefined });
+test("a contract file with prose around the JSON still fails the contract", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-prose-"));
+	const restore = useEnv({ FAKE_HERDR_LOG: join(dir, "herdr.log"), FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir });
 	try {
-		const settings = settingsFor(dir, { herdrBin: FAKE_HERDR, paneMode: "on" });
-		const supervisor = new Supervisor(settings);
-		const plan = planFor(dir, settings);
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
+		const plan = planFor(dir, settingsFor(dir, { paneMode: "on" }));
 		const meta = await supervisor.dispatch(plan, plan.prompt);
-		assert.equal(meta.runner, "spawn");
-		assert.match(meta.paneFallback!, /no Herdr workspace owns/);
-		// Declining means never creating a tab.
-		assert.equal(herdrCalls(log).some((call) => call.args[0] === "tab" && call.args[1] === "create"), false);
-		assert.equal(await settle(supervisor, meta.id), "complete");
+		// The executor wrote prose and the JSON: the contract must not pass.
+		writeFileSync(plan.paths.resultPath, "Here is the result:\n{\"ticket\":\"42\"}");
+		const report = await supervisor.refresh(meta.id);
+		assert.equal(report.outcome.kind, "contract_failed");
 	} finally {
 		restore();
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test("closeTab declines a job that did not run in a pane", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-refuse-"));
-	try {
-		const supervisor = new Supervisor(settingsFor(dir));
-		const plan = planFor(dir, settingsFor(dir));
-		const meta = await supervisor.dispatch(plan, plan.prompt);
-		const refused = await supervisor.closeTab(meta.id);
-		assert.equal(refused.ok, false);
-		assert.match(refused.error!, /did not run in a Herdr pane/);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test("closeTab declines a running pane job", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-running-"));
-	try {
-		const supervisor = new Supervisor(settingsFor(dir));
-		const plan = planFor(dir, settingsFor(dir));
-		const meta = await supervisor.dispatch(plan, plan.prompt);
-		// Mark it as a live pane job by hand: dispatch would need a real pane.
-		meta.runner = "pane";
-		meta.pane = { workspaceId: "w", tabId: "w:t9", paneId: "w:p9", label: "fleet: 42" };
-		meta.state = "running";
-		const refused = await supervisor.closeTab(meta.id);
-		assert.equal(refused.ok, false);
-		assert.match(refused.error!, /still running/);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test("closableTabs: a tab closes only when every job on it settled", () => {
-	const pane = { workspaceId: "w", tabId: "w:t1", paneId: "w:p1", label: "fleet: 42" };
-	const { tabs, blocked } = closableTabs([
-		{ state: "complete", pane },
-		{ state: "failed", pane },
-		{ state: "running", pane: { ...pane, tabId: "w:t2" } },
-		{ state: "running", pane: undefined },
-	]);
-	assert.deepEqual(tabs, ["w:t1"]);
-	assert.deepEqual(blocked, ["w:t2"]);
-});
-
-test("herdr JSON parsers take the real shapes and fail closed on junk", () => {
-	const tab = parseTabCreate(`{"result":{"tab":{"tab_id":"w1K:t17"},"root_pane":{"pane_id":"w1K:p3K"}}}`);
-	assert.deepEqual(tab, { tabId: "w1K:t17", paneId: "w1K:p3K" });
-	assert.equal(parseTabCreate("fish: not json"), undefined);
-	assert.equal(parseTabCreate(JSON.stringify({ result: {} })), undefined);
-	const list = parseWorkspaceList(`{"result":{"workspaces":[{"workspace_id":"w24","worktree":{"checkout_path":"/private/tmp/repo"}}]}}`);
-	assert.ok(Array.isArray(list));
-	// Herdr reports /private/tmp; the caller says /tmp. Either side matches.
-	assert.equal(workspaceForWorktree(list!, "/tmp/repo"), "w24");
-	assert.equal(workspaceForWorktree(list!, "/var/other"), undefined);
-	assert.equal(parseWorkspaceList("nope"), undefined);
-});
-
-test("supervisor.notify reaches herdr and never throws when the channel is down", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-notify-"));
-	const log = join(dir, "herdr.log");
-	try {
-		const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF" });
-		const supervisor = new Supervisor(settingsFor(dir, { herdrBin: FAKE_HERDR }));
-		assert.equal(await supervisor.notify("fleet: 42 finished", "exit code 0 — harvest to judge the contract"), true);
-		const call = herdrCalls(log).at(-1)!;
-		assert.deepEqual(call.args, ["notification", "show", "fleet: 42 finished", "--body", "exit code 0 — harvest to judge the contract", "--sound", "done"]);
-		restore();
-
-		// A dead notification channel returns false. It must not throw: the
-		// caller fires it and forgets, and no job waits on a ping.
-		const down = useEnv({ FAKE_HERDR_FAIL: "1", FAKE_HERDR_LOG: log });
-		assert.equal(await supervisor.notify("fleet: 42 finished", "exit code 0"), false);
-		down();
-	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

@@ -43,7 +43,7 @@ function planFor(dir: string, brief: string) {
 async function settle(supervisor: Supervisor, id: string, deadlineMs = 15_000): Promise<string> {
 	const started = Date.now();
 	while (Date.now() - started < deadlineMs) {
-		const outcome = supervisor.refresh(id).outcome;
+		const outcome = await (await supervisor.refresh(id)).outcome;
 		if (outcome.kind !== "running") return outcome.kind;
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
@@ -58,7 +58,7 @@ test("a compliant executor harvests to contract_complete", { timeout: 30_000 }, 
 		const meta = await supervisor.dispatch(plan, plan.prompt);
 
 		assert.equal(await settle(supervisor, meta.id), "complete");
-		const report = supervisor.refresh(meta.id);
+		const report = await supervisor.refresh(meta.id);
 		assert.equal(report.outcome.kind, "complete");
 		if (report.outcome.kind === "complete") {
 			assert.equal(report.outcome.meta.contractOk, true);
@@ -81,7 +81,7 @@ test("a zero exit with a broken contract is contract_failed, never complete", { 
 		const meta = await supervisor.dispatch(plan, plan.prompt);
 
 		assert.equal(await settle(supervisor, meta.id), "contract_failed");
-		const report = supervisor.refresh(meta.id);
+		const report = await supervisor.refresh(meta.id);
 		if (report.outcome.kind === "contract_failed") {
 			assert.match(report.outcome.error, /expected an object|result\.ticket/);
 		} else {
@@ -102,7 +102,7 @@ test("a second session rehydrates the job from disk", { timeout: 30_000 }, async
 
 		const second = new Supervisor(settingsFor(dir));
 		assert.equal(second.loadFromDisk(), 1);
-		const report = second.refresh(meta.id);
+		const report = await second.refresh(meta.id);
 		assert.equal(report.outcome.kind, "complete");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -160,7 +160,7 @@ test("an inherited running job past its wall-clock ceiling settles as timeout", 
 		first.persist(meta);
 		const second = new Supervisor(settingsFor(dir));
 		second.loadFromDisk();
-		const report = second.refresh(meta.id);
+		const report = await second.refresh(meta.id);
 		assert.equal(report.outcome.kind, "failed");
 		if (report.outcome.kind === "failed") {
 			assert.equal(report.outcome.meta.state, "timeout");
@@ -184,7 +184,7 @@ test("a claude job the provider refused reports the refusal, not an empty stderr
 		const meta = await supervisor.dispatch(plan, plan.prompt);
 
 		assert.equal(await settle(supervisor, meta.id), "failed");
-		const report = supervisor.refresh(meta.id);
+		const report = await supervisor.refresh(meta.id);
 		assert.equal(report.outcome.kind, "failed");
 		if (report.outcome.kind === "failed") {
 			assert.match(report.outcome.error, /403/);

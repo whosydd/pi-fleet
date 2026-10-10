@@ -55,10 +55,12 @@ interpretation functions over canned answers.
   already-gated brief).
 - **One harvest reports once.** Re-harvesting a settled job must not re-run
   the triage or duplicate the ledger entry.
-- **Panes stay open until cleanup says so.** A pane job's evidence is its own
-  `exit_code` file, never the pid of the herdr CLI that launched it; a tab is
-  closed only by `FleetCleanup`, only for settled jobs, and only for tabs this
-  extension created. Pane channel failure degrades to a detached spawn.
+- **Panes stay open until cleanup says so.** An interactive job is proven by the
+  contract file the agent writes, never by herdr's lifecycle state and never by
+  the pane transcript: `idle` and `done` only mean ready for input, and the
+  transcript is wrapped, scrolled, and full of TUI chrome. A tab is closed only
+  by `FleetCleanup`, only for settled jobs, and only for tabs this extension
+  created. Interactive failure degrades to a detached one-shot spawn.
 - **The orchestrator never stashes, amends, or force-pushes.** `git stash`
   crosses worktrees through the shared `refs/stash`, and an amend or a force
   push invalidates a commit a review base or a fix round names. `gitguard.ts`

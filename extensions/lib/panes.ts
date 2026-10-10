@@ -1,26 +1,29 @@
 /**
- * Pane mode: run the executor inside a Herdr pane so a human can watch it.
+ * Interactive pane mode: the executor runs as a Herdr-managed agent (codex or
+ * claude TUI) that a human can watch and talk to.
  *
  * Pure: every function takes already-read values and returns plain strings and
  * objects. No fs, no spawning, no pi imports. `supervise.ts` owns the Herdr
  * invocations, `index.ts` owns the tool wiring.
  *
- * The pane's login shell is whatever the user runs (fish on this machine), so
- * the only command text ever sent to a pane is one short, shell-neutral call:
- * `bash <run.sh>`. Everything else — the executor argv, output shaping, exit
- * code, stdin — lives in the script file, which has its own bash shebang.
+ * Two facts shape this module.
+ *
+ * First, herdr reports `idle` and `done` as "ready for input", not "the task
+ * finished", and `unknown` proves nothing. So no lifecycle state ever decides
+ * success. The contract file decides it, exactly as in detached mode.
+ *
+ * Second, a pane transcript is unreliable to parse: soft wraps, the TUI's own
+ * chrome, and scrollback limits. Live reads returned the prompt box instead of
+ * the answer. So the executor writes the contract to a file, and the human reads
+ * the pane by eye.
  */
 
-import type { JobMeta } from "./types.ts";
+import type { ExecutorKind, JobMeta, PaneTargets } from "./types.ts";
 
 export type PaneMode = "auto" | "on" | "off";
 
-export interface PaneTargets {
-	workspaceId: string;
-	tabId: string;
-	paneId: string;
-	label: string;
-}
+/** herdr's agent lifecycle states, as reported by `agent get`. */
+export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
 /** Shapes seen in `herdr workspace list` and `herdr worktree *` JSON. */
 export interface WorkspaceEntry {
@@ -30,20 +33,22 @@ export interface WorkspaceEntry {
 	worktree?: { checkout_path?: string; repo_root?: string } | null;
 }
 
+/** The `agent get` facts a harvest needs. */
+export interface AgentRead {
+	status: AgentStatus;
+	name: string;
+	paneId?: string;
+	tabId?: string;
+	workspaceId?: string;
+}
+
 /**
  * One Herdr workspace entry per worktree path. Matching is by real path:
  * Herdr reports `/private/tmp/...` where the caller passes `/tmp/...`, and
  * macOS resolves one to the other. Entries without a usable id drop out.
  */
 export function workspaceForWorktree(entries: WorkspaceEntry[], worktree: string): string | undefined {
-	let wanted: string;
-	try {
-		// realpath is fs, but a pure string pass keeps this testable: callers
-		// pass already-normalised paths and the wiring normalises once.
-		wanted = normalisePath(worktree);
-	} catch {
-		return undefined;
-	}
+	const wanted = normalisePath(worktree);
 	for (const entry of entries) {
 		const id = entry.workspace_id;
 		if (!id) continue;
@@ -59,7 +64,7 @@ function normalisePath(path: string): string {
 }
 
 /**
- * Should this dispatch run in a pane? The explicit parameter wins; the
+ * Should this dispatch run interactively? The explicit parameter wins; the
  * setting decides the rest, and `auto` means: only when this pi itself runs
  * inside a Herdr pane (HERDR_ENV=1).
  */
@@ -70,86 +75,63 @@ export function resolvePaneMode(explicit: boolean | undefined, setting: PaneMode
 	return herdrEnv === "1";
 }
 
-/** POSIX single-quote escaping: close, escaped quote, reopen. Every shell agrees. */
-export function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-/** A quoted path under the run dir. */
-function file(runDir: string, name: string): string {
-	return shellQuote(`${runDir}/${name}`);
-}
-
-/** The exact command text sent to a pane. One short call; nothing else. */
-export function paneRunCommand(runScriptPath: string): string {
-	return `bash ${shellQuote(runScriptPath)}`;
-}
-
-export interface RunScriptInput {
-	worktree: string;
-	command: string[];
-	runDir: string;
-	/** When set, the pane announces the finished run through Herdr. */
-	notify?: NotifyRequest;
-}
-
 /**
- * A completion ping. The wording states the exit code and names the harvest as
- * the thing that judges success: a finished executor is not a passed contract.
+ * A herdr agent name for one job: `fleet-<ticket>-<nonce>` kept inside herdr's
+ * `[a-z][a-z0-9_-]{0,31}` rule. The nonce keeps two dispatches of one ticket
+ * (a review while a fix round runs) from colliding on one live name.
  */
-export interface NotifyRequest {
-	herdrBin: string;
-	title: string;
+export function agentName(ticket: string, nonce: string): string {
+	const slug = ticket
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, "-")
+		.replace(/^[-_]+/, "")
+		.replace(/[-_]+$/, "");
+	const body = slug === "" ? "job" : slug;
+	const raw = `fleet-${body}-${nonce}`.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+	return /^[a-z]/.test(raw) ? raw : `f${raw}`.slice(0, 32);
 }
 
-/** The `exit_code` line, the notification line, and the script's own status. */
-function closingLines(input: RunScriptInput): string[] {
-	const lines = [`echo "$ec" > ${file(input.runDir, "exit_code")}`];
-	if (input.notify) {
-		// The ping states the exit code and points at the harvest: a finished
-		// executor is not a passed contract. `|| true` keeps a notification
-		// failure from changing the run's own status.
-		const body = `"finished with exit code $ec \u2014 harvest to judge the contract"`;
-		lines.push(`${shellQuote(input.notify.herdrBin)} notification show ${shellQuote(input.notify.title)} --body ${body} --sound done >/dev/null 2>&1 || true`);
-	}
-	lines.push(`exit "$ec"`);
-	return lines;
+/** `herdr agent start` argv. Model overrides go after `--`, which the executor parses itself. */
+export function agentStartArgv(name: string, kind: ExecutorKind, paneId: string, model?: string): string[] {
+	const argv = ["agent", "start", name, "--kind", kind, "--pane", paneId];
+	if (model) argv.push("--", kind === "codex" ? "-m" : "--model", model);
+	return argv;
 }
 
-/**
- * The script a pane runs. bash regardless of the pane's login shell, so the
- * exit code and output shaping are ours, not fish's.
- *
- * stdin is /dev/null: codex exec reads stdin when it is a pipe, and a live
- * pane TTY must never look like input. stdout and stderr each tee to a file
- * and the pane, so the human watches live output and the harvest still reads
- * exact bytes (claude's stdout.log must stay pure JSON, so the streams never
- * merge). exit_code is written after the command ends; the pid file records
- * the script's own bash pid for cross-session liveness checks.
- */
-export function runScript(input: RunScriptInput): string {
-	const [bin, ...args] = input.command;
-	const quoted = [bin, ...args].map(shellQuote).join(" ");
-	return [
-		"#!/usr/bin/env bash",
-		"set -u",
-		`cd ${shellQuote(input.worktree)} || { echo 127 > ${file(input.runDir, "exit_code")}; exit 127; }`,
-		`echo $$ > ${file(input.runDir, "pid")}`,
-		`${quoted} </dev/null > >(tee ${file(input.runDir, "stdout.log")}) 2> >(tee ${file(input.runDir, "stderr.log")} >&2)`,
-		"ec=$?",
-		...closingLines(input),
-		"",
-	].join("\n");
+/** `herdr pane split` argv, for a further job in a tab that already hosts one. */
+export function paneSplitArgv(paneId: string, direction: "right" | "down", cwd: string): string[] {
+	return ["pane", "split", paneId, "--direction", direction, "--cwd", cwd, "--no-focus"];
 }
 
-/** Parse the script's pid file text. Empty, partial, or junk yields undefined. */
-export function readPidFromText(text: string): number | undefined {
-	const trimmed = text.trim();
-	if (!/^\d+$/.test(trimmed)) return undefined;
-	return Number(trimmed);
+/** `herdr agent prompt` argv. The task text is one argument; no shell sees it. */
+export function agentPromptArgv(name: string, task: string): string[] {
+	return ["agent", "prompt", name, task];
 }
 
-/** Parse the run's exit code file. `signal` (killed without a code) and junk yield undefined. */
+/** `herdr agent get` argv. */
+export function agentGetArgv(name: string): string[] {
+	return ["agent", "get", name];
+}
+
+/** `herdr agent wait` argv: block until the agent reaches a settled state. */
+export function agentWaitArgv(name: string, timeoutMs: number): string[] {
+	return ["agent", "wait", name, "--until", "idle", "--until", "done", "--until", "blocked", "--timeout", String(timeoutMs)];
+}
+
+/** Split direction for the nth job in one tab: first sibling right, next below. */
+export function paneDirection(jobsAlreadyInTab: number): "right" | "down" {
+	return jobsAlreadyInTab === 0 ? "right" : "down";
+}
+
+/** When a tab holds this many fleet jobs, open a new tab instead of splitting again. */
+export const TAB_FANOUT_LIMIT = 3;
+
+/** A settled state proves only that the agent is ready for input. It never proves the task finished. `blocked` means it waits on a human. */
+export function isAgentWaiting(status: string): boolean {
+	return status === "blocked";
+}
+
+/** Parse a run's exit code text. `signal` (killed without a code) and junk yield undefined. */
 export function readExitCodeText(text: string): number | undefined {
 	const trimmed = text.trim();
 	if (trimmed === "signal") return undefined;
@@ -159,36 +141,50 @@ export function readExitCodeText(text: string): number | undefined {
 
 /** The `herdr workspace list` entries, or undefined when the output is not that shape. */
 export function parseWorkspaceList(stdout: string): WorkspaceEntry[] | undefined {
-	let data: unknown;
-	try {
-		data = JSON.parse(stdout);
-	} catch {
-		return undefined;
-	}
-	const workspaces = (data as { result?: { workspaces?: unknown } }).result?.workspaces;
+	const data = parseJson(stdout);
+	const workspaces = (data as { result?: { workspaces?: unknown } } | undefined)?.result?.workspaces;
 	return Array.isArray(workspaces) ? (workspaces as WorkspaceEntry[]) : undefined;
 }
 
 /** The tab and pane ids a `herdr tab create` response reported, or undefined. */
 export function parseTabCreate(stdout: string): { tabId: string; paneId: string } | undefined {
-	let data: unknown;
-	try {
-		data = JSON.parse(stdout);
-	} catch {
-		return undefined;
-	}
-	const result = (data as { result?: { tab?: { tab_id?: string }; root_pane?: { pane_id?: string } } }).result;
+	const result = (parseJson(stdout) as { result?: { tab?: { tab_id?: string }; root_pane?: { pane_id?: string } } } | undefined)?.result;
 	const tabId = result?.tab?.tab_id;
 	const paneId = result?.root_pane?.pane_id;
 	if (typeof tabId !== "string" || tabId === "" || typeof paneId !== "string" || paneId === "") return undefined;
 	return { tabId, paneId };
 }
 
+/** The pane id a `herdr pane split` response reported, or undefined. */
+export function parsePaneSplit(stdout: string): string | undefined {
+	const paneId = (parseJson(stdout) as { result?: { pane?: { pane_id?: string } } } | undefined)?.result?.pane?.pane_id;
+	return typeof paneId === "string" && paneId !== "" ? paneId : undefined;
+}
+
+/** The agent facts an `herdr agent get` response reported, or undefined. */
+export function parseAgentGet(stdout: string): AgentRead | undefined {
+	const agent = (parseJson(stdout) as { result?: { agent?: Record<string, unknown> } } | undefined)?.result?.agent;
+	if (!agent) return undefined;
+	const status = agent.agent_status;
+	if (status !== "idle" && status !== "working" && status !== "blocked" && status !== "done" && status !== "unknown") return undefined;
+	const name = typeof agent.name === "string" ? agent.name : "";
+	const ids = (key: string) => (typeof agent[key] === "string" ? (agent[key] as string) : undefined);
+	return { status, name, paneId: ids("pane_id"), tabId: ids("tab_id"), workspaceId: ids("workspace_id") };
+}
+
+function parseJson(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+}
+
 /**
- * Which fleet tabs may close? A tab closes only when every job that used it
- * has settled (nothing running), and only tabs this extension created count.
- * The worktree and its workspace never close here: the human inspects file
- * changes after the run, and closing those is a separate deliberate act.
+ * Which fleet tabs may close? A tab closes only when every job that used it has
+ * settled (nothing running), and only tabs this extension created count. The
+ * worktree and its workspace never close here: the human inspects file changes
+ * after the run, and closing those is a separate deliberate act.
  */
 export function closableTabs(jobs: Pick<JobMeta, "state" | "pane">[]): { tabs: string[]; blocked: string[] } {
 	const byTab = new Map<string, { settled: number; running: number }>();

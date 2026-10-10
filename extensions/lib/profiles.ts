@@ -130,6 +130,15 @@ const KIND_RULES: Record<TaskKind, string[]> = {
 const OUTPUT_RULE =
 	"When done, your final message must be only the JSON object matching the Result contract below. No prose around it.";
 
+/**
+ * The interactive form of the same rules. A TUI answer cannot be harvested: a
+ * pane transcript is wrapped, scrolled, and full of the TUI's own chrome, so the
+ * contract travels as a file the executor writes, and the pane stays a human
+ * surface. One dispatch, one file.
+ */
+const AGENT_OUTPUT_RULE =
+	"When done, use your file tools to write the contract as ONE JSON object matching the Result contract below into the file named here. Nothing else may be in that file: no prose, no code fence, no trailing note. Your message in this terminal is read by a human, not by the orchestrator.";
+
 export function buildPrompt(input: DispatchInput, briefPath: string): string {
 	const lines = [
 		...COMMON_RULES,
@@ -149,16 +158,49 @@ export function buildPrompt(input: DispatchInput, briefPath: string): string {
 	return lines.join("\n");
 }
 
+/**
+ * The prompt for an interactive executor running in a Herdr pane.
+ *
+ * Same rules and same schema as the one-shot form; only the delivery differs:
+ * the contract goes to `resultPath` as a file, and the human may answer questions
+ * in the pane, so the prompt says a blocked run is reported in the contract
+ * rather than left waiting.
+ */
+export function buildAgentPrompt(input: DispatchInput, briefPath: string, resultPath: string): string {
+	const lines = [
+		...COMMON_RULES,
+		...KIND_RULES[input.taskKind],
+		"You run in a terminal pane that a human is watching. They may answer a question you ask, but do not wait on one: if you are blocked, say so in the contract and stop.",
+		`Read the brief at ${briefPath} and follow it.`,
+	];
+	if (input.skillPointer) {
+		lines.push(`Load and follow the skill instructions at: ${input.skillPointer}`);
+	}
+	if (input.base) {
+		lines.push(`Review fixed point: ${input.base}`);
+	}
+	if (input.fixRound > 0) {
+		lines.push(`This is fix round ${input.fixRound}: address only the findings named in the brief, and change nothing else.`);
+	}
+	lines.push("", `${AGENT_OUTPUT_RULE} ${resultPath}`, "Result contract:", JSON.stringify(schemaFor(input.taskKind), null, 2));
+	return lines.join("\n");
+}
+
 export interface ProfileArgs {
 	argv: string[];
 	schemaArg: { flag: string; value: string };
 }
 
 /**
- * codex exec: `-o` writes the final message (the contract) to a file; `--json`
- * streams events with usage to stdout for the supervisor to read. claude -p:
- * `--json-schema` makes stdout JSON carry `structured_output`; the supervisor
- * extracts the contract from stdout itself.
+ * One-shot (detached) argv. Interactive dispatches do not use this: they run the
+ * executor's own TUI and deliver the brief through `herdr agent prompt`.
+ *
+ * codex exec: `-o` writes the final message (the contract) to a file.
+ * claude -p: `--json-schema` makes stdout JSON carry `structured_output`; the
+ * supervisor extracts the contract from stdout.
+ *
+ * Neither form carries permission, tool, or network flags: how the executor does
+ * the work is the executor's own policy.
  */
 export function buildArgv(
 	input: DispatchInput,

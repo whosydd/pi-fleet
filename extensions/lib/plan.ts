@@ -46,6 +46,8 @@ export interface DispatchPlan {
 	timeoutMs: number;
 	command: string[];
 	prompt: string;
+	/** The brief as written: the interactive form needs it, the one-shot form carries it in the prompt file. */
+	brief: string;
 	paths: JobPaths;
 	now: number;
 	/** True when the executor should run in a Herdr pane. */
@@ -153,9 +155,7 @@ export function planDispatch(params: DispatchParams, settings: FleetSettings, ct
 		stdoutPath: `${runDir}/stdout.log`,
 		stderrPath: `${runDir}/stderr.log`,
 		metaPath: `${runDir}/meta.json`,
-		scriptPath: `${runDir}/run.sh`,
 		exitCodePath: `${runDir}/exit_code`,
-		pidPath: `${runDir}/pid`,
 	};
 
 	const input = {
@@ -188,6 +188,7 @@ export function planDispatch(params: DispatchParams, settings: FleetSettings, ct
 			timeoutMs,
 			command,
 			prompt,
+			brief,
 			paths,
 			now,
 			pane,

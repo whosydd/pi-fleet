@@ -25,12 +25,8 @@ export interface JobPaths {
 	stdoutPath: string;
 	stderrPath: string;
 	metaPath: string;
-	/** The bash script a pane runs (pane mode only). */
-	scriptPath: string;
-	/** Final exit code, written by run.sh or by the spawn-mode exit handler. */
+	/** Final exit code, written by the spawn-mode exit handler. */
 	exitCodePath: string;
-	/** Pid of the running command, for cross-session liveness checks. */
-	pidPath: string;
 }
 
 export interface PaneTargets {
@@ -69,13 +65,17 @@ export interface JobMeta {
 	triage?: TriageRecord[];
 	/** Set after the first harvest reported this job as settled to the model. */
 	harvestReported?: boolean;
-	/** How the process started: pi's own child, or a Herdr pane command. */
-	runner?: "spawn" | "pane";
-	/** Herdr locations for a pane job. */
+	/** How the process started: pi's own child, or a Herdr-managed interactive agent. */
+	runner?: "spawn" | "agent";
+	/** Herdr locations for an interactive job. */
 	pane?: PaneTargets;
+	/** The herdr agent name for an interactive job. */
+	agentName?: string;
+	/** Last agent lifecycle state a harvest observed. Records waiting-for-a-human; never decides success. */
+	agentStatus?: string;
 	/** When FleetCleanup closed the pane's tab; absent while it stays open. */
 	paneClosedAt?: number;
-	/** Why a pane dispatch fell back to a detached spawn, if it did. */
+	/** Why an interactive dispatch fell back to a detached spawn, if it did. */
 	paneFallback?: string;
 }
 
@@ -105,7 +105,7 @@ export interface FleetSettings {
 	claudeBin: string;
 	/** Block git stash, git commit --amend, and force push in this session's bash calls (PI_FLEET_GIT_GUARD=off disables). */
 	gitGuard: boolean;
-	/** Run executors in Herdr panes: auto = when this session sits in Herdr (HERDR_ENV=1). */
+	/** Run executors as interactive Herdr agents: auto = when this session sits in Herdr (HERDR_ENV=1). */
 	paneMode: "auto" | "on" | "off";
 	herdrBin: string;
 	/** Ping a human when an executor finishes (PI_FLEET_NOTIFY=off disables). */

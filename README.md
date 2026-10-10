@@ -45,7 +45,7 @@ survives the session. Parameters:
 | `model` | Passed to the executor CLI (`-m` / `--model`). |
 | `fix_round` | Increment on re-dispatch after review findings; capped at `PI_FLEET_MAX_FIX_ROUND`, then the tool refuses and the model should escalate to the user. |
 | `timeout_ms` | Wall-clock limit for the process. |
-| `pane` | Run the executor in a Herdr pane. Absent follows `PI_FLEET_PANES`. |
+| `pane` | Run the executor as an interactive Herdr agent you can watch and talk to. Absent follows `PI_FLEET_PANES`. |
 
 The dispatch injects the structural rules into the prompt: commit to the
 current branch, never `git stash` / `--amend` / force push, never close or edit
@@ -74,32 +74,46 @@ job keeps its tab and is reported as blocked. Cleanup never closes a worktree,
 a workspace, or a pane it did not create, and the run dir keeps every log, so
 closing a tab loses no evidence.
 
-## Herdr panes
+## Interactive panes
 
 With `PI_FLEET_PANES=auto` (the default) and pi running inside Herdr
-(`HERDR_ENV=1`), a dispatch starts the executor in a pane you can watch
-instead of a detached process nobody sees:
+(`HERDR_ENV=1`), a dispatch opens the executor's own TUI in a pane you can
+watch and talk to, instead of a detached process nobody sees:
 
-1. The worktree's own Herdr workspace is found from `herdr workspace list`.
-2. `herdr tab create --label "fleet: <ticket>" --cwd <worktree> --no-focus`
-   makes one tab per job in that workspace.
-3. The pane runs one short command, `bash <run-dir>/run.sh`. Everything else —
-   the argv, output shaping, exit code — lives in that script, because the
-   pane's login shell may be fish, which has no `$?`.
-4. `run.sh` runs the executor with stdin closed and tees stdout and stderr to
-   `stdout.log` / `stderr.log` and to the pane, records its pid, then writes
-   `exit_code`. The streams never merge: claude's `stdout.log` has to stay
-   parseable JSON.
+1. The worktree's Herdr workspace is found from `herdr workspace list`.
+2. One tab per ticket: `herdr tab create --label "fleet: <ticket>" --cwd
+   <worktree> --no-focus`. A further job of the same ticket splits that tab
+   (`herdr pane split`), and past three jobs a new tab opens.
+3. `herdr agent start <name> --kind codex|claude --pane <id>` starts the real
+   TUI. The name is `fleet-<ticket>-<nonce>`, so a review and a fix round of one
+   ticket never share an agent.
+4. `herdr agent prompt <name> <task>` delivers the task. The task text points at
+   the brief file and states the contract rule: write the JSON into
+   `<run-dir>/result.json` and put nothing else in that file.
 
-After the executor exits, the shell returns to its prompt and the tab stays
-open: that is where you read the transcript and check file changes. The harvest
-reads the tab's own evidence (`exit_code`, then the contract), so a pane job
-settles the same way whether or not the pi session is alive. Nothing closes a
-pane by itself — use `FleetCleanup` when the run is fully read.
+You can switch into the pane at any time: watch the work, answer a question, or
+press Esc to interrupt. `FleetHarvest` reports `running` plus a note when herdr
+says the agent is `blocked`, which means it waits on you.
 
-If the pane channel fails (no Herdr, no workspace for that worktree, CLI
-error), the dispatch degrades to a detached spawn and says so in its result.
-An observability channel must never block a dispatch.
+The contract file is still the only success signal. herdr's `idle` and `done`
+mean "ready for input", not "the task finished", so an agent that settles with
+no contract file is `contract_failed`, never a quiet completion. A pane
+transcript is never parsed: soft wraps, scrollback limits, and the TUI's own
+chrome make it unreliable, which is why the contract travels as a file.
+
+Nothing closes a pane by itself. Use `FleetCleanup` once the run is fully read.
+
+If the interactive channel fails (no Herdr, no workspace for that worktree, an
+agent that never came up), the dispatch degrades to a detached one-shot spawn
+and says so in its result. Observability must never block a dispatch. Set
+`PI_FLEET_PANES=off` to ask for that form directly: it is what an unattended run
+uses, because one-shot argv needs no terminal.
+
+In the detached form, `codex exec` gets `--output-schema` plus `-o`, and
+`claude -p` gets `--output-format json --json-schema`. One caution measured
+live: `codex exec --output-schema` documents that it constrains the final
+response, but a refusal from the provider still exited 0 and `-o` held prose.
+The extension's own contract check is what catches that, not the flag.
 
 Create the worktree itself in Herdr when you can, so it arrives with its own
 workspace:
@@ -113,15 +127,17 @@ herdr worktree create --cwd <repo> --branch fleet/<ticket> --label "fleet: <tick
 
 ### Completion ping
 
-A finished executor pings instead of going quiet (`PI_FLEET_NOTIFY=off`
-stops it). A pane job pings from inside its own script, so the ping arrives
-even when the pi session is gone; a detached spawn pings through pi's UI, or
-through Herdr when pi runs headless. Exactly one channel fires per job.
+A finished executor pings instead of going quiet (`PI_FLEET_NOTIFY=off` stops
+it). An interactive job pings through a background `herdr agent wait`, so the
+ping arrives when the agent stops working, whether that is a finished turn or a
+question it needs you to answer. A detached spawn pings from its own exit
+event, through pi's UI when one exists and through Herdr when pi runs headless.
+Exactly one channel fires per job.
 
-The wording is deliberate: the ping reports the exit code and points at the
-harvest. It never claims the contract passed — only `FleetHarvest` decides
-that. A ping that cannot be delivered is dropped in silence; the notification
-channel never blocks or fails a job.
+The wording is deliberate: the ping names the agent's state or the exit code and
+points at the harvest. It never claims the contract passed — only `FleetHarvest`
+decides that. A ping that cannot be delivered is dropped in silence; the
+notification channel never blocks or fails a job.
 
 ## Result contract
 
@@ -222,7 +238,7 @@ Environment, read once at load — reload pi to change it.
 | `PI_FLEET_HERDR_BIN` | `herdr` | herdr binary used for pane tabs and cleanup. |
 | `PI_FLEET_NOTIFY` | `on` | `off` stops the completion ping through the UI or Herdr. |
 | `PI_FLEET_GIT_GUARD` | `on` | `off` stops blocking `git stash`, `git commit --amend`, and force push. |
-| `PI_FLEET_PANES` | `auto` | Run executors in Herdr panes: `auto` = only when `HERDR_ENV=1`, `on` / `off` decide outright. |
+| `PI_FLEET_PANES` | `auto` | Run executors as interactive Herdr agents: `auto` = only when `HERDR_ENV=1`, `on` / `off` decide outright. `off` uses the one-shot `codex exec` / `claude -p` argv. |
 
 ## Intended shape in the workflow
 

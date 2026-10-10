@@ -61,7 +61,7 @@ import {
 	type TriageVerdict,
 } from "./lib/judgments.ts";
 import { findGitHazard } from "./lib/gitguard.ts";
-import { closableTabs } from "./lib/panes.ts";
+import { closableTabs, isAgentWaiting } from "./lib/panes.ts";
 import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
 import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
@@ -249,9 +249,11 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			// script, so pi pings it here when the child exits. Only one of the two
 			// channels ever fires for a given job.
 			const onSettled = (settled: JobMeta): void => {
-				if (!settings.notify || settled.runner === "pane") return;
+				if (!settings.notify) return;
 				const title = `fleet: ${settled.ticket} finished`;
-				const body = `exit code ${settled.exitCode ?? "signal"} — harvest to judge the contract`;
+				// The two forms report different facts: a spawn leaves an exit code, an
+				// agent leaves a lifecycle state, and neither one proves the contract.
+				const body = settled.runner === "agent" ? `the agent is ${settled.agentStatus ?? "ready"} — harvest to judge the contract` : `exit code ${settled.exitCode ?? "signal"} — harvest to judge the contract`;
 				if (ctx.hasUI) {
 					ctx.ui.notify(`${title}: ${body}`, "info");
 					return;
@@ -267,9 +269,9 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			pi.appendEntry(entry.customType, entry.data);
 			const skill = plan.skillPointer ? `\nSkill pointer: ${plan.skillPointer}` : "";
 			const paneNote = meta.pane
-				? `\nPane: ${meta.pane.tabId} (${meta.pane.label}) — live output there, and the tab stays open after the run. FleetCleanup closes it once the job settles.`
+				? `\nInteractive pane: ${meta.pane.paneId} (tab ${meta.pane.tabId}, agent ${meta.agentName}). Watch it live, answer it if it waits for you, interrupt it there with Esc. It writes the contract to ${plan.paths.resultPath}. The tab stays open after the run; FleetCleanup closes it.`
 				: meta.paneFallback
-					? `\nPane unavailable, running detached instead: ${meta.paneFallback}`
+					? `\nInteractive dispatch unavailable, running detached instead: ${meta.paneFallback}`
 					: "";
 			return textResult(
 				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}${paneNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${skill}`,
@@ -297,10 +299,14 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			if (!supervisor.get(jobId)) {
 				return textResult(`unknown job "${jobId}". FleetStatus lists what this session knows.`, { status: "rejected" });
 			}
-			const report = supervisor.refresh(jobId);
+			const report = await supervisor.refresh(jobId);
 			const outcome: HarvestOutcome = report.outcome;
 			if (outcome.kind === "running") {
-				return textResult(`${jobId} is still running (executor ${supervisor.get(jobId)!.executor}, started ${Math.round((Date.now() - supervisor.get(jobId)!.startedAt) / 1000)}s ago). Harvest again later.`, {
+				const job = supervisor.get(jobId)!;
+				// An interactive agent that reports `blocked` is waiting on a human at an
+				// approval or question. Say so: the run is not slow, it is stalled on you.
+				const waiting = isAgentWaiting(job.agentStatus ?? "") ? ` It waits for you at an approval or question in pane ${job.pane?.paneId ?? "?"} — answer it there, or press Esc.` : "";
+				return textResult(`${jobId} is still running (executor ${job.executor}, started ${Math.round((Date.now() - job.startedAt) / 1000)}s ago). Harvest again later.${waiting}`, {
 					status: "running",
 				});
 			}
