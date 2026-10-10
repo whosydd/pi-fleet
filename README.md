@@ -117,7 +117,8 @@ failed judgment channel degrades to a note — it must never block a dispatch.
 
 ## Where state lives
 
-`PI_FLEET_STATE_DIR` (default `.fleet/`) holds one run dir per job:
+`PI_FLEET_STATE_DIR` (default `.fleet/`, resolved against the session's working
+directory at load, so every recorded path is absolute) holds one run dir per job:
 `brief.md`, `schema.json`, `result.json`, `stdout.log`, `stderr.log`,
 `meta.json`. The disk is the source of truth: dispatch-and-forget is the
 documented semantic, jobs outlive the pi session (executors are spawned into
@@ -134,7 +135,7 @@ Environment, read once at load — reload pi to change it.
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `PI_FLEET_STATE_DIR` | `.fleet` | Run-dir root. |
+| `PI_FLEET_STATE_DIR` | `.fleet` | Run-dir root, resolved to an absolute path at load. |
 | `PI_FLEET_MAX_CONCURRENCY` | `4` | Concurrent executors; further dispatches are refused, not queued. |
 | `PI_FLEET_TIMEOUT_MS` | `1800000` | Default wall-clock per job. |
 | `PI_FLEET_MAX_FIX_ROUND` | `2` | Fix rounds before dispatch refusal forces escalation. |

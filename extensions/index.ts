@@ -14,7 +14,8 @@
  * A dispatch is detached: it returns a job id and the turn continues. Harvest
  * happens on a later turn (FleetHarvest), usually after the user pings or the
  * model checks back. Jobs survive the session: state lives on disk under
- * PI_FLEET_STATE_DIR (default .fleet).
+ * PI_FLEET_STATE_DIR (default .fleet, resolved to an absolute path at load so
+ * the executor's worktree cwd never resolves a run-dir path against itself).
  *
  * Jev judgments (degradable, PI_FLEET_JUDGMENTS=off disables): the
  * pre-dispatch gate turns brief readiness into three thresholded nouls, and
@@ -23,7 +24,7 @@
  * judgment, and a failed judgment channel must never block a dispatch.
  *
  * Configuration (environment, read once at load — reload to change):
- *   PI_FLEET_STATE_DIR         run-dir root (default: .fleet)
+ *   PI_FLEET_STATE_DIR         run-dir root (default: .fleet, made absolute)
  *   PI_FLEET_MAX_CONCURRENCY   concurrent executors (default: 4)
  *   PI_FLEET_TIMEOUT_MS        default wall-clock per job (default: 1800000)
  *   PI_FLEET_MAX_FIX_ROUND     fix-round cap before escalation (default: 2)

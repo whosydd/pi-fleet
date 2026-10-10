@@ -7,6 +7,7 @@
  * before dispatch; this module judges the parameters.
  */
 
+import { resolve } from "node:path";
 import { buildArgv, buildPrompt, schemaFor } from "./profiles.ts";
 import { EXECUTOR_KINDS, TASK_KINDS, type ExecutorKind, type FleetSettings, type JobPaths, type TaskKind } from "./types.ts";
 
@@ -47,8 +48,16 @@ export interface DispatchPlan {
 export type PlanFailure = { ok: false; message: string };
 export type PlanResult = { ok: true; plan: DispatchPlan } | PlanFailure;
 
-export function readSettings(env: NodeJS.ProcessEnv = process.env): FleetSettings {
-	const stateDir = env.PI_FLEET_STATE_DIR || ".fleet";
+/**
+ * Read settings once at load. `cwd` is a parameter, not a hidden read, so
+ * tests can pin the resolution. The state dir is resolved to an absolute path
+ * because a run dir is written by the orchestrator and read and written again
+ * by the executor, whose cwd is the worktree: a relative path resolves against
+ * two different roots and lands on no file (live codex failure: `Failed to read
+ * output schema file .fleet/runs/.../schema.json: No such file or directory`).
+ */
+export function readSettings(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): FleetSettings {
+	const stateDir = resolve(cwd, env.PI_FLEET_STATE_DIR || ".fleet");
 	const maxConcurrent = parsePositive(env.PI_FLEET_MAX_CONCURRENCY, 4);
 	const defaultTimeoutMs = parsePositive(env.PI_FLEET_TIMEOUT_MS, 1_800_000);
 	const maxFixRound = parsePositive(env.PI_FLEET_MAX_FIX_ROUND, 2);

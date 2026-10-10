@@ -74,6 +74,7 @@ export interface TriageRecord {
 }
 
 export interface FleetSettings {
+	/** Absolute run-dir root: a relative one would resolve against the executor's cwd (the worktree) instead of the session's. */
 	stateDir: string;
 	maxConcurrent: number;
 	defaultTimeoutMs: number;

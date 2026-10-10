@@ -99,9 +99,12 @@ test("ids are filesystem-safe", () => {
 });
 
 test("readSettings falls back to defaults and honours overrides", () => {
-	const defaults = readSettings({});
+	const defaults = readSettings({}, "/proj");
 	assert.equal(defaults.maxConcurrent, 4);
-	const overridden = readSettings({ PI_FLEET_MAX_CONCURRENCY: "9", PI_FLEET_STATE_DIR: "/tmp/fleet-state" });
+	assert.equal(defaults.stateDir, "/proj/.fleet");
+	const overridden = readSettings({ PI_FLEET_MAX_CONCURRENCY: "9", PI_FLEET_STATE_DIR: "/tmp/fleet-state" }, "/proj");
 	assert.equal(overridden.maxConcurrent, 9);
 	assert.equal(overridden.stateDir, "/tmp/fleet-state");
+	const relative = readSettings({ PI_FLEET_STATE_DIR: "../state" }, "/proj/.worktrees/wt");
+	assert.equal(relative.stateDir, "/proj/.worktrees/state");
 });
