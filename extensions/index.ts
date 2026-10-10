@@ -67,7 +67,7 @@ import { findGitHazard } from "./lib/gitguard.ts";
 import { closableTabs, isAgentWaiting } from "./lib/panes.ts";
 import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
 import { reportFrontier, type Ticket } from "./lib/frontier.ts";
-import { fixBriefFor, nextStep, reviewBriefFor } from "./lib/loop.ts";
+import { fixBriefFor, nextStep, reviewBriefFor, type ContractSummary } from "./lib/loop.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
 import { ensureStateDirIgnored, inspectNodeDeps } from "./lib/preflight.ts";
 import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
@@ -458,7 +458,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	}
 
 	/** The contract file the job wrote, or undefined when it cannot be read. */
-	function readContract(meta: JobMeta): { branch?: string; commits?: unknown[]; summary?: string } | undefined {
+	function readContract(meta: JobMeta): ContractSummary | undefined {
 		try {
 			return JSON.parse(readFileSync(meta.paths.resultPath, "utf8"));
 		} catch {
@@ -500,9 +500,11 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		await harvestTool.execute("fleet-loop", { job_id: jobId }, undefined, undefined, ctx);
 		const settled = supervisor.get(jobId);
 		if (!settled) return;
-		const step = nextStep(settled, settings.maxFixRound, settled.triage !== undefined || !judgeSettings.enabled);
+		// The contract is read once, before the step is decided: the loop needs the
+		// executor's own status, not just the fact that the contract validated.
+		const contract = readContract(settled);
+		const step = nextStep(settled, contract, settings.maxFixRound, settled.triage !== undefined || !judgeSettings.enabled);
 		if (step.kind === "review") {
-			const contract = readContract(settled);
 			chainHops.set(ticket, hops + 1);
 			await dispatchTool.execute(
 				"fleet-loop",

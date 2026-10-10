@@ -13,6 +13,14 @@ import type { JobMeta, TriageRecord } from "./types.ts";
  * should happen next, given what the last job settled as.
  */
 
+/** The parts of an executor's contract the loop reasons about. */
+export interface ContractSummary {
+	status?: string;
+	branch?: string;
+	commits?: unknown[];
+	summary?: string;
+}
+
 export type LoopStep =
 	/** Dispatch a review of this ticket's work, on the other harness. */
 	| { kind: "review" }
@@ -31,11 +39,13 @@ export function blockerFindings(triage: TriageRecord[]): string[] {
 /**
  * What the fleet should dispatch next for a settled job, or nothing.
  *
- * `maxFixRound` is the cap on repair rounds. An unset triage channel is
- * degradable: without verdicts the loop cannot name blockers, so it halts with
+ * `contract` is the settled job's own contract, because a valid contract is not
+ * the same as landed work: an executor can hold a valid contract that says
+ * `blocked`. `maxFixRound` is the cap on repair rounds. An unset triage channel
+ * is degradable: without verdicts the loop cannot name blockers, so it halts with
  * a note rather than inventing a round.
  */
-export function nextStep(meta: JobMeta, maxFixRound: number, triageAvailable: boolean): LoopStep {
+export function nextStep(meta: JobMeta, contract: ContractSummary | undefined, maxFixRound: number, triageAvailable: boolean): LoopStep {
 	if (meta.state !== "complete" || meta.contractOk !== true) {
 		return { kind: "halt", reason: meta.contractError ?? `${meta.state}: the contract is the only success signal` };
 	}
@@ -46,6 +56,13 @@ export function nextStep(meta: JobMeta, maxFixRound: number, triageAvailable: bo
 		if (meta.fixRound >= maxFixRound) return { kind: "halt", reason: `fix rounds capped at ${maxFixRound} with ${findings.length} blocker(s) left` };
 		return { kind: "fix", findings };
 	}
+	// Only landed work can be reviewed. A valid contract can still report
+	// `blocked`: a live run did exactly that when the executor's sandbox could not
+	// write the worktree's git metadata to commit, and a review of an empty diff
+	// spends a real round to say so.
+	if (contract?.status !== "implemented") {
+		return { kind: "halt", reason: `the implementation reported "${contract?.status ?? "no status"}": nothing landed to review` };
+	}
 	return { kind: "review" };
 }
 
@@ -54,7 +71,7 @@ export function nextStep(meta: JobMeta, maxFixRound: number, triageAvailable: bo
  * contract. It names the fixed point and the two axes, because the reviewer reads
  * this text and nothing else.
  */
-export function reviewBriefFor(meta: JobMeta, contract: { branch?: string; commits?: unknown[]; summary?: string }): string {
+export function reviewBriefFor(meta: JobMeta, contract: ContractSummary): string {
 	const base = meta.base ?? contract.branch ?? "HEAD~1";
 	const commits = contract.commits?.length ?? 0;
 	const claim = contract.summary ? `What the implementer claims it does: ${contract.summary}` : "What the implementer claims is unstated; read the diff.";
