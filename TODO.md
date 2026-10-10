@@ -66,11 +66,26 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   环与未知依赖以字符串报告，不抛异常。
   依赖：#15。
 
+- [x] **#26 执行器跑在可见的 Herdr pane 里**（本仓库）—— 已落地
+  范围：`PI_FLEET_PANES=auto`（`HERDR_ENV=1` 即开）下，`FleetDispatch` 在
+  worktree 所属 workspace 里 `herdr tab create` 开一个 tab，跑 `run.sh`；
+  `run.sh` 把 stdout/stderr 各自 `tee` 进日志与 pane，记 `pid`，结束时写
+  `exit_code`。pane 里默认 shell 是 fish，所以发给 pane 的只有一条
+  `bash <abs>/run.sh`，所有 shell 语义留在脚本里。执行器退出后 tab 不关，人
+  在里面看输出与文件改动；`FleetCleanup { job_id?, all? }` 只关本扩展建的 tab，
+  running 的 job 拒绝关，worktree 与 workspace 永不自动关。
+  降级：无 herdr / 反查不到 workspace / CLI 报错 → 退回静默 spawn，并在 dispatch
+  结果里写明原因。观测通道永远不能阻塞派发。
+  验收：`test/panes.test.ts` 11 项（fake herdr 走真 bash 跑真 run.sh，日志/pid/
+  exit_code 落盘）；真会话验一次（stand-in 执行器，不等额度）。
+  依赖：无。本轮需求：用户要看到 codex 在干什么，不要黑箱。
+
 - [ ] **#17 执行器完成通知**（本仓库）
   范围：`supervise.ts` 的 exit handler 接上通知回调。TUI/RPC 用 `ctx.ui.notify`，
   无头场景用 `herdr notification show <title> --sound done`。
   验收标准：派发后本轮结束，执行器退出时人能被提醒；pi 不在前台时不留静默。
-  依赖：#15。这是当前最大的体验缺口（收割只发生在用户 ping 时）。
+  依赖：无（#26 已把可见性解决；剩下的只是“好了叫我”）。pane 模式下通知可以从
+  `exit_code` 落盘触发，不依赖 child handle。
 
 ## P2 — 工作流地基
 
@@ -98,9 +113,10 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 - [ ] **#21 implement-spec 外层循环规则化**（目标：`../pi-mattpocock-skills`，新建
   pi 侧 skill）
-  范围：把外层循环写成 pi 的节拍——读票图 → 每票建 worktree → 派发 → 收割 →
+  范围：把外层循环写成 pi 的节拍——读票图 → 每票 `herdr worktree create`（一个
+  worktree 一个 workspace，#26 的 pane 直接开在里面）→ 派发 → 收割 →
   关票 → 重算 frontier → 全部完成后独立派发 review → blocker 级 findings 才起
-  fix round（上限 2，超限升级给人）→ 清理 worktree。
+  fix round（上限 2，超限升级给人）→ `FleetCleanup all` 关 tab → 清 worktree。
   内层（tdd、契约自报）留在执行器侧，靠 `skill_pointer` 指向 SKILL.md 路径。
   验收标准：跑通一张两票、带 blocking 边的规格。
   依赖：#16、#17、#19。

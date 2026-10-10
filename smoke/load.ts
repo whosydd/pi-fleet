@@ -51,7 +51,7 @@ try {
 	});
 	const active = session.getActiveToolNames();
 	console.log(
-		`active tools: FleetDispatch=${active.includes("FleetDispatch")} FleetHarvest=${active.includes("FleetHarvest")} FleetStatus=${active.includes("FleetStatus")}`,
+		`active tools: FleetDispatch=${active.includes("FleetDispatch")} FleetHarvest=${active.includes("FleetHarvest")} FleetStatus=${active.includes("FleetStatus")} FleetCleanup=${active.includes("FleetCleanup")}`,
 	);
 	session.dispose();
 } catch (error) {

@@ -25,6 +25,20 @@ export interface JobPaths {
 	stdoutPath: string;
 	stderrPath: string;
 	metaPath: string;
+	/** The bash script a pane runs (pane mode only). */
+	scriptPath: string;
+	/** Final exit code, written by run.sh or by the spawn-mode exit handler. */
+	exitCodePath: string;
+	/** Pid of the running command, for cross-session liveness checks. */
+	pidPath: string;
+}
+
+export interface PaneTargets {
+	workspaceId: string;
+	/** The tab this extension created for the job; FleetCleanup may close it. */
+	tabId: string;
+	paneId: string;
+	label: string;
 }
 
 export interface JobMeta {
@@ -55,6 +69,14 @@ export interface JobMeta {
 	triage?: TriageRecord[];
 	/** Set after the first harvest reported this job as settled to the model. */
 	harvestReported?: boolean;
+	/** How the process started: pi's own child, or a Herdr pane command. */
+	runner?: "spawn" | "pane";
+	/** Herdr locations for a pane job. */
+	pane?: PaneTargets;
+	/** When FleetCleanup closed the pane's tab; absent while it stays open. */
+	paneClosedAt?: number;
+	/** Why a pane dispatch fell back to a detached spawn, if it did. */
+	paneFallback?: string;
 }
 
 export interface GateRecord {
@@ -83,6 +105,9 @@ export interface FleetSettings {
 	claudeBin: string;
 	/** Block git stash, git commit --amend, and force push in this session's bash calls (PI_FLEET_GIT_GUARD=off disables). */
 	gitGuard: boolean;
+	/** Run executors in Herdr panes: auto = when this session sits in Herdr (HERDR_ENV=1). */
+	paneMode: "auto" | "on" | "off";
+	herdrBin: string;
 }
 
 export const EXECUTOR_KINDS: readonly ExecutorKind[] = ["codex", "claude"];

@@ -19,14 +19,15 @@ interpretation functions over canned answers.
 ## Layout
 
 - `extensions/index.ts` — pi extension entry: tool registration, gate and
-  triage wiring. Keep it thin.
+  triage wiring, and the git guard handlers. Keep it thin.
 - `extensions/lib/` — implementation modules (see README).
 - Pure modules own the decisions, the wiring owns the I/O: `plan.ts` (dispatch
   validation and planning), `contract.ts` (contract validation), `frontier.ts`
   (ticket-graph frontier), `judgments.ts` (question catalog and interpretation),
-  `gitguard.ts` (command screening) stay free of fs, spawning, and pi imports so
+  `gitguard.ts` (command screening), `panes.ts` (Herdr topology, run.sh text,
+  cleanup decisions) stay free of fs, spawning, and pi imports so
   they test without a session or a model call. `supervise.ts` is the only module
-  that spawns.
+  that spawns, and the only one that calls the herdr CLI.
 
 ## Invariants
 
@@ -50,6 +51,10 @@ interpretation functions over canned answers.
   already-gated brief).
 - **One harvest reports once.** Re-harvesting a settled job must not re-run
   the triage or duplicate the ledger entry.
+- **Panes stay open until cleanup says so.** A pane job's evidence is its own
+  `exit_code` file, never the pid of the herdr CLI that launched it; a tab is
+  closed only by `FleetCleanup`, only for settled jobs, and only for tabs this
+  extension created. Pane channel failure degrades to a detached spawn.
 - **The orchestrator never stashes, amends, or force-pushes.** `git stash`
   crosses worktrees through the shared `refs/stash`, and an amend or a force
   push invalidates a commit a review base or a fix round names. `gitguard.ts`

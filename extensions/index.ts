@@ -35,6 +35,9 @@
  *   PI_FLEET_JUDGE_ID          classifier id (default: jev-latest)
  *   PI_FLEET_GIT_GUARD         on (default) | off — block git stash, commit
  *                              --amend, and force push in bash calls
+ *   PI_FLEET_PANES             auto (default) | on | off — run executors in
+ *                              Herdr panes; auto means HERDR_ENV=1 only
+ *   PI_FLEET_HERDR_BIN         herdr binary (default: herdr)
  *   PI_FLEET_GATE_FLOOR        noul hard floor, refuse below (default: 0.7)
  *   PI_FLEET_GATE_WARN         noul warn line (default: 0.85)
  *   PI_FLEET_TRIAGE_CONFIDENCE triage confidence floor (default: 0.8)
@@ -56,6 +59,7 @@ import {
 	type TriageVerdict,
 } from "./lib/judgments.ts";
 import { findGitHazard } from "./lib/gitguard.ts";
+import { closableTabs } from "./lib/panes.ts";
 import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
 import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
@@ -68,6 +72,7 @@ Rules the tool enforces (it refuses instead of guessing):
 - task_kind "review" needs base: the fixed point to diff against. Reviews see committed work only, so commit-before-review is the caller's job (verify with git log <base>..HEAD).
 - fix_round is capped; past the cap the tool refuses and you should escalate to the user.
 - Executors are told to stop at a commit and never close tickets. Closing the ticket and recomputing the frontier is yours, after a contract_complete harvest.
+- Pane mode (PI_FLEET_PANES, default auto: on when pi runs inside Herdr) starts the executor in a Herdr tab so a human can watch it live. The tab stays open after the run: read its output and the file changes there, then close it with FleetCleanup. A dispatch never closes a pane by itself.
 
 Contract: the executor's final output must be JSON. implement jobs report ticket/status/branch/commits/tests; review jobs report per-axis worst issues (standards + spec, never merged). The tool validates it; a zero exit with a broken contract is contract_failed, not complete.`;
 
@@ -87,7 +92,8 @@ function textResult<T>(text: string, details: T): { content: { type: "text"; tex
 
 function jobLine(meta: JobMeta): string {
 	const gate = meta.gate ? ` · gate ${meta.gate.outcome}` : "";
-	return `${meta.id} · ${meta.ticket} · ${meta.executor}/${meta.taskKind} · ${meta.state} · fix ${meta.fixRound}${gate}`;
+	const pane = meta.pane ? (meta.paneClosedAt === undefined ? ` · pane ${meta.pane.tabId}` : " · pane closed") : "";
+	return `${meta.id} · ${meta.ticket} · ${meta.executor}/${meta.taskKind} · ${meta.state} · fix ${meta.fixRound}${gate}${pane}`;
 }
 
 export default function fleetExtension(pi: ExtensionAPI) {
@@ -175,6 +181,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			model: Type.Optional(Type.String({ description: "Model override passed to the executor CLI. Omit for the executor's default." })),
 			fix_round: Type.Optional(Type.Number({ description: "0 for a first dispatch (default). Increment when re-dispatching after review findings; capped." })),
 			timeout_ms: Type.Optional(Type.Number({ description: "Wall-clock limit for the executor process. Default PI_FLEET_TIMEOUT_MS." })),
+			pane: Type.Optional(Type.Boolean({ description: "Run the executor in a Herdr pane so a human can watch it. Absent follows PI_FLEET_PANES (auto: on inside Herdr). The tab stays open after the run for inspection; FleetCleanup closes it." })),
 		}),
 		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
 			const args = params as DispatchParams;
@@ -199,7 +206,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 				return textResult(`worktree "${args.worktree}" is not a git checkout (no .git). Executors require a git repository.`, { status: "rejected" });
 			}
 
-			const planned = planDispatch(args, settings, { runningCount: supervisor.runningCount() });
+			const planned = planDispatch(args, settings, { runningCount: supervisor.runningCount(), herdrEnv: process.env.HERDR_ENV });
 			if (!planned.ok) {
 				return textResult(planned.message, { status: "rejected" });
 			}
@@ -236,16 +243,21 @@ export default function fleetExtension(pi: ExtensionAPI) {
 
 			let meta: JobMeta;
 			try {
-				meta = supervisor.dispatch(plan, args.brief, gateRecord);
+				meta = await supervisor.dispatch(plan, args.brief, gateRecord);
 			} catch (error) {
 				return textResult(`dispatch failed: ${error instanceof Error ? error.message : String(error)}`, { status: "rejected" });
 			}
 			const entry = dispatchedEntry(meta);
 			pi.appendEntry(entry.customType, entry.data);
 			const skill = plan.skillPointer ? `\nSkill pointer: ${plan.skillPointer}` : "";
+			const paneNote = meta.pane
+				? `\nPane: ${meta.pane.tabId} (${meta.pane.label}) — live output there, and the tab stays open after the run. FleetCleanup closes it once the job settles.`
+				: meta.paneFallback
+					? `\nPane unavailable, running detached instead: ${meta.paneFallback}`
+					: "";
 			return textResult(
-				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${skill}`,
-				{ status: "dispatched", jobId: meta.id, ticket: meta.ticket, runDir: `${settings.stateDir}/runs/${meta.id}`, gate: gateRecord },
+				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}${paneNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${skill}`,
+				{ status: "dispatched", jobId: meta.id, ticket: meta.ticket, runDir: `${settings.stateDir}/runs/${meta.id}`, gate: gateRecord, pane: meta.pane, paneFallback: meta.paneFallback },
 			);
 		},
 	});
@@ -389,18 +401,79 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		parameters: Type.Object({}),
 		execute: async () => {
 			const jobs = supervisor.all();
+			const summary = {
+				jobs: jobs.map((job) => ({ id: job.id, ticket: job.ticket, state: job.state, executor: job.executor, taskKind: job.taskKind, fixRound: job.fixRound, pane: job.pane, paneClosedAt: job.paneClosedAt })),
+				openTabs: supervisor.listOpenTabs(),
+			};
 			if (jobs.length === 0) {
-				return textResult("No fleet jobs in this session. Jobs from earlier sessions appear after loadFromDisk (a reload rehydrates them).", { jobs: [] });
+				return textResult("No fleet jobs in this session. Jobs from earlier sessions appear after loadFromDisk (a reload rehydrates them).", summary);
 			}
 			const running = supervisor.runningCount();
 			const lines = jobs.map(jobLine);
-			return textResult(`${jobs.length} job(s), ${running} running:\n${lines.join("\n")}`, {
-				jobs: jobs.map((job) => ({ id: job.id, ticket: job.ticket, state: job.state, executor: job.executor, taskKind: job.taskKind, fixRound: job.fixRound })),
-			});
+			return textResult(
+				`${jobs.length} job(s), ${running} running${summary.openTabs.length > 0 ? `, ${summary.openTabs.length} fleet pane tab(s) still open` : ""}:\n${lines.join("\n")}`,
+				summary,
+			);
+		},
+	});
+
+	const cleanupTool = defineTool({
+		name: "FleetCleanup",
+		label: "Fleet Cleanup",
+		description: `Close the Herdr pane tabs that fleet jobs created, once those jobs settled. Call it when the work a fleet run touched is fully read: harvested, reviewed, and any file changes you still need are inspected.
+
+What it closes: only tabs this extension created for pane jobs, never the worktree, never its Herdr workspace, never a pane you opened yourself. A job that is still running keeps its tab: close it only after the job settles (harvest it, or stop it from the pane first).
+
+The run dir and every log survive cleanup, so a closed tab never loses evidence.`,
+		promptSnippet: "Close settled fleet job pane tabs once the run is fully read",
+		promptGuidelines: [
+			"Use FleetCleanup after the last harvest of a run, not before: the pane is where the user reads executor output and checks file changes.",
+			"FleetCleanup reports running jobs as blocked; harvest them instead of closing their tabs out from under them.",
+		],
+		parameters: Type.Object({
+			job_id: Type.Optional(Type.String({ description: "Close the tab of one settled job. Requires the job to have run in a pane." })),
+			all: Type.Optional(Type.Boolean({ description: "Close every tab whose jobs have all settled. Ignored when job_id is present." })),
+		}),
+		execute: async (_toolCallId, params) => {
+			const args = params as { job_id?: string; all?: boolean };
+			const jobId = args.job_id?.trim();
+			if (jobId) {
+				const result = await supervisor.closeTab(jobId);
+				if (!result.ok) return textResult(`FleetCleanup refused: ${result.error}`, { status: "rejected", jobId });
+				return textResult(
+					result.alreadyClosed ? `${jobId}: tab already closed.` : `${jobId}: tab closed. The worktree and its files are untouched; the run dir keeps every log.`,
+					{ status: "closed", jobId, alreadyClosed: result.alreadyClosed === true },
+				);
+			}
+			if (args.all !== true) {
+				return textResult("FleetCleanup needs job_id or all: true. FleetStatus lists the jobs and their tabs.", { status: "rejected" });
+			}
+			const paneJobs = supervisor.all().filter((job) => job.pane !== undefined);
+			if (paneJobs.length === 0) return textResult("No pane jobs in this session; nothing to close.", { status: "noop", closed: [] });
+			const plan = closableTabs(paneJobs);
+			const closed: string[] = [];
+			const failed: string[] = [];
+			for (const job of paneJobs) {
+				const tabId = job.pane?.tabId;
+				if (!tabId || !plan.tabs.includes(tabId)) continue;
+				const result = await supervisor.closeTab(job.id);
+				if (result.ok) {
+					if (!closed.includes(tabId)) closed.push(tabId);
+				} else if (!failed.includes(tabId)) {
+					failed.push(`${tabId}: ${result.error}`);
+				}
+			}
+			const blockedText = plan.blocked.length > 0 ? `\nBlocked, still running: ${plan.blocked.join(", ")}. Harvest those jobs first.` : "";
+			const failedText = failed.length > 0 ? `\nFailed: ${failed.join("; ")}` : "";
+			return textResult(
+				closed.length > 0 ? `Closed ${closed.length} tab(s): ${closed.join(", ")}.${blockedText}${failedText}` : `Nothing to close.${blockedText}${failedText}`,
+				{ status: closed.length > 0 ? "closed" : "noop", closed, blocked: plan.blocked, failed },
+			);
 		},
 	});
 
 	pi.registerTool(dispatchTool);
 	pi.registerTool(harvestTool);
 	pi.registerTool(statusTool);
+	pi.registerTool(cleanupTool);
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planDispatch, readSettings } from "../extensions/lib/plan.ts";
+import { planDispatch, readSettings, type FleetSettings } from "../extensions/lib/plan.ts";
 
 const base = {
 	ticket: "42",
@@ -10,7 +10,7 @@ const base = {
 	brief: "Build the login form at the auth seam.",
 };
 
-const settings = {
+const settings: FleetSettings = {
 	stateDir: ".fleet",
 	maxConcurrent: 2,
 	defaultTimeoutMs: 60_000,
@@ -18,6 +18,8 @@ const settings = {
 	codexBin: "codex",
 	claudeBin: "claude",
 	gitGuard: true,
+	paneMode: "auto",
+	herdrBin: "herdr",
 };
 
 test("rejects dispatches missing each required field, with a field-naming message", () => {

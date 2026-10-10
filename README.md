@@ -45,6 +45,7 @@ survives the session. Parameters:
 | `model` | Passed to the executor CLI (`-m` / `--model`). |
 | `fix_round` | Increment on re-dispatch after review findings; capped at `PI_FLEET_MAX_FIX_ROUND`, then the tool refuses and the model should escalate to the user. |
 | `timeout_ms` | Wall-clock limit for the process. |
+| `pane` | Run the executor in a Herdr pane. Absent follows `PI_FLEET_PANES`. |
 
 The dispatch injects the structural rules into the prompt: commit to the
 current branch, never `git stash` / `--amend` / force push, never close or edit
@@ -62,8 +63,53 @@ reports the job; later ones return the same artifacts without re-judging.
 
 ### FleetStatus
 
-List jobs with state. Jobs from earlier sessions rehydrate from disk
-on session start (see below).
+List jobs with state, including which pane tabs are still open. Jobs from
+earlier sessions rehydrate from disk on session start (see below).
+
+### FleetCleanup
+
+Close the Herdr tabs that fleet jobs created. `job_id` closes one settled
+job's tab; `all: true` closes every tab whose jobs have all settled. A running
+job keeps its tab and is reported as blocked. Cleanup never closes a worktree,
+a workspace, or a pane it did not create, and the run dir keeps every log, so
+closing a tab loses no evidence.
+
+## Herdr panes
+
+With `PI_FLEET_PANES=auto` (the default) and pi running inside Herdr
+(`HERDR_ENV=1`), a dispatch starts the executor in a pane you can watch
+instead of a detached process nobody sees:
+
+1. The worktree's own Herdr workspace is found from `herdr workspace list`.
+2. `herdr tab create --label "fleet: <ticket>" --cwd <worktree> --no-focus`
+   makes one tab per job in that workspace.
+3. The pane runs one short command, `bash <run-dir>/run.sh`. Everything else —
+   the argv, output shaping, exit code — lives in that script, because the
+   pane's login shell may be fish, which has no `$?`.
+4. `run.sh` runs the executor with stdin closed and tees stdout and stderr to
+   `stdout.log` / `stderr.log` and to the pane, records its pid, then writes
+   `exit_code`. The streams never merge: claude's `stdout.log` has to stay
+   parseable JSON.
+
+After the executor exits, the shell returns to its prompt and the tab stays
+open: that is where you read the transcript and check file changes. The harvest
+reads the tab's own evidence (`exit_code`, then the contract), so a pane job
+settles the same way whether or not the pi session is alive. Nothing closes a
+pane by itself — use `FleetCleanup` when the run is fully read.
+
+If the pane channel fails (no Herdr, no workspace for that worktree, CLI
+error), the dispatch degrades to a detached spawn and says so in its result.
+An observability channel must never block a dispatch.
+
+Create the worktree itself in Herdr when you can, so it arrives with its own
+workspace:
+
+```bash
+herdr worktree create --cwd <repo> --branch fleet/<ticket> --label "fleet: <ticket>" --no-focus
+```
+
+`herdr worktree open` does the same for a worktree that already exists. A plain
+`git worktree add` works too: the tab then lands in the session's own workspace.
 
 ## Result contract
 
@@ -161,7 +207,9 @@ Environment, read once at load — reload pi to change it.
 | `PI_FLEET_MAX_FIX_ROUND` | `2` | Fix rounds before dispatch refusal forces escalation. |
 | `PI_FLEET_CODEX_BIN` | `codex` | codex binary. |
 | `PI_FLEET_CLAUDE_BIN` | `claude` | claude binary. |
+| `PI_FLEET_HERDR_BIN` | `herdr` | herdr binary used for pane tabs and cleanup. |
 | `PI_FLEET_GIT_GUARD` | `on` | `off` stops blocking `git stash`, `git commit --amend`, and force push. |
+| `PI_FLEET_PANES` | `auto` | Run executors in Herdr panes: `auto` = only when `HERDR_ENV=1`, `on` / `off` decide outright. |
 
 ## Intended shape in the workflow
 
@@ -185,8 +233,13 @@ workflow documents.
   quoting trick, and it never reaches inside an executor. The executor-side ban
   travels in the dispatch prompt, and executor-side hooks (`.rules`, pre-commit)
   remain worth installing.
-- Worktree creation is the caller's job (`git worktree add`, or herdr's
-  worktree workspaces for human-visible panes).
+- Worktree creation stays outside the tools. Prefer `herdr worktree create`
+  (one worktree, one workspace, one visible pane) or `git worktree add`.
+- A pane job past its wall-clock ceiling is marked `timeout` and never killed by
+  pi: closing its tab with `FleetCleanup` is what stops the executor, and the
+  recorded pid may already name a recycled process after that long.
+- Pane mode needs a running Herdr server in the session's environment. Without
+  it the dispatch degrades to a detached spawn and says so.
 - `codex exec` runs with its own default sandbox policy; set executor-side
   policy (`~/.codex/config.toml`) if your executor needs different rails.
 - Executor spend is not captured or attributed to the session's `/cost`; the
@@ -204,12 +257,13 @@ npm run smoke     # loads the extension through pi's loader (no model call)
 
 ```
 extensions/
-  index.ts            tool registration: FleetDispatch / FleetHarvest / FleetStatus
+  index.ts            tool registration: FleetDispatch / FleetHarvest / FleetStatus / FleetCleanup
   lib/
     types.ts          shared types
     profiles.ts       executor argv + prompt building (pure)
     plan.ts           dispatch validation and planning (pure)
     contract.ts       result contract validation (pure)
+    panes.ts          Herdr pane mode: tab topology, run.sh text, cleanup decision (pure)
     gitguard.ts       command screening for the three fleet-breaking git calls (pure)
     frontier.ts       ticket-graph frontier computation (pure)
     judgments.ts      Jev gate and triage: question catalog, interpretation, thresholds (pure)

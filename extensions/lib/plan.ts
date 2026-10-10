@@ -8,6 +8,7 @@
  */
 
 import { resolve } from "node:path";
+import { resolvePaneMode, type PaneMode } from "./panes.ts";
 import { buildArgv, buildPrompt, schemaFor } from "./profiles.ts";
 import { EXECUTOR_KINDS, TASK_KINDS, type ExecutorKind, type FleetSettings, type JobPaths, type TaskKind } from "./types.ts";
 
@@ -22,10 +23,14 @@ export interface DispatchParams {
 	model?: string;
 	fix_round?: number;
 	timeout_ms?: number;
+	/** Explicit pane choice; absent defers to PI_FLEET_PANES. */
+	pane?: boolean;
 }
 
 export interface PlanContext {
 	runningCount: number;
+	/** HERDR_ENV value, for the auto pane decision. */
+	herdrEnv?: string;
 }
 
 export interface DispatchPlan {
@@ -43,6 +48,8 @@ export interface DispatchPlan {
 	prompt: string;
 	paths: JobPaths;
 	now: number;
+	/** True when the executor should run in a Herdr pane. */
+	pane: boolean;
 }
 
 export type PlanFailure = { ok: false; message: string };
@@ -69,12 +76,19 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env, cwd: string =
 		codexBin: env.PI_FLEET_CODEX_BIN || "codex",
 		claudeBin: env.PI_FLEET_CLAUDE_BIN || "claude",
 		gitGuard: (env.PI_FLEET_GIT_GUARD || "on").toLowerCase() !== "off",
+		paneMode: parsePaneMode(env.PI_FLEET_PANES),
+		herdrBin: env.PI_FLEET_HERDR_BIN || "herdr",
 	};
 }
 
 function parsePositive(value: string | undefined, fallback: number): number {
 	const parsed = Number(value);
 	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function parsePaneMode(value: string | undefined): PaneMode {
+	const lowered = (value || "auto").toLowerCase();
+	return lowered === "on" || lowered === "off" ? lowered : "auto";
 }
 
 function ticketId(ticket: string): string {
@@ -138,6 +152,9 @@ export function planDispatch(params: DispatchParams, settings: FleetSettings, ct
 		stdoutPath: `${runDir}/stdout.log`,
 		stderrPath: `${runDir}/stderr.log`,
 		metaPath: `${runDir}/meta.json`,
+		scriptPath: `${runDir}/run.sh`,
+		exitCodePath: `${runDir}/exit_code`,
+		pidPath: `${runDir}/pid`,
 	};
 
 	const input = {
@@ -153,6 +170,7 @@ export function planDispatch(params: DispatchParams, settings: FleetSettings, ct
 	};
 	const command = buildArgv(input, paths, settings);
 	const prompt = buildPrompt(input, paths.promptPath);
+	const pane = resolvePaneMode(params.pane, settings.paneMode, ctx.herdrEnv);
 
 	return {
 		ok: true,
@@ -171,6 +189,7 @@ export function planDispatch(params: DispatchParams, settings: FleetSettings, ct
 			prompt,
 			paths,
 			now,
+			pane,
 		},
 	};
 }

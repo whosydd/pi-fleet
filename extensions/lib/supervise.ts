@@ -12,12 +12,16 @@
  * liveness for jobs inherited from a previous session.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { claudeFailureNote, parseClaudeStdout, validateContract } from "./contract.ts";
+import { paneRunCommand, parseTabCreate, parseWorkspaceList, readExitCodeText, readPidFromText, runScript, workspaceForWorktree, type WorkspaceEntry } from "./panes.ts";
 import { schemaFor } from "./profiles.ts";
 import type { FleetSettings, JobMeta } from "./types.ts";
+
+const execFileAsync = promisify(execFile);
 
 export type HarvestOutcome =
 	| { kind: "running" }
@@ -73,7 +77,7 @@ export class Supervisor {
 	 * schema.json, and meta.json first so a crashed pi still leaves a
 	 * reconstructable run dir behind.
 	 */
-	dispatch(
+	async dispatch(
 		plan: {
 			id: string;
 			ticket: string;
@@ -89,10 +93,11 @@ export class Supervisor {
 			prompt: string;
 			paths: JobMeta["paths"];
 			now: number;
+			pane: boolean;
 		},
 		brief: string,
 		gate?: JobMeta["gate"],
-	): JobMeta {
+	): Promise<JobMeta> {
 		// File prep can fail on a read-only state dir; surface a named error
 		// instead of a raw fs exception through the tool boundary.
 		try {
@@ -101,6 +106,9 @@ export class Supervisor {
 			}
 			writeFileSync(plan.paths.promptPath, brief, "utf8");
 			writeFileSync(plan.paths.schemaPath, JSON.stringify(schemaFor(plan.taskKind), null, 2), "utf8");
+			// run.sh records the exact command either way: a pane executes it, and a
+			// detached spawn leaves it behind as the reproducible form of the argv.
+			writeFileSync(plan.paths.scriptPath, runScript({ worktree: plan.worktree, command: plan.command, runDir: dirname(plan.paths.metaPath) }), "utf8");
 		} catch (error) {
 			throw new Error(
 				`cannot prepare the run dir under ${this.settings.stateDir}: ${error instanceof Error ? error.message : String(error)}. Check PI_FLEET_STATE_DIR is writable.`,
@@ -123,9 +131,87 @@ export class Supervisor {
 			timeoutMs: plan.timeoutMs,
 			state: "running",
 			briefChars: brief.length,
+			runner: plan.pane ? "pane" : "spawn",
 			...(gate ? { gate } : {}),
 		};
 
+		if (plan.pane) {
+			const started = await this.#startInPane(plan, meta);
+			if (started.ok) {
+				this.#register(meta);
+				return meta;
+			}
+			// Observability degrades to a note, never a blocked dispatch: the pane
+			// channel failed, so run the job the way it ran before Herdr existed.
+			meta.paneFallback = started.error;
+			meta.runner = "spawn";
+		}
+
+		this.#startSpawned(plan, meta);
+		this.#register(meta);
+		return meta;
+	}
+
+	#register(meta: JobMeta): void {
+		this.#jobs.set(meta.id, meta);
+		this.persist(meta);
+		if (meta.state === "running") {
+			this.#timers.set(
+				meta.id,
+				setTimeout(() => this.timeout(meta.id), meta.timeoutMs).unref(),
+			);
+		}
+	}
+
+	/**
+	 * Start the job in a Herdr pane: one tab per job inside the workspace that
+	 * owns the worktree, running run.sh. The pane's shell stays alive after the
+	 * executor exits, so the human can still read the output and the diff.
+	 */
+	async #startInPane(plan: Parameters<Supervisor["dispatch"]>[0], meta: JobMeta): Promise<{ ok: true } | { ok: false; error: string }> {
+		const workspaceId = await this.#workspaceFor(plan.worktree);
+		if (!workspaceId) {
+			return { ok: false, error: `no Herdr workspace owns ${plan.worktree}, and this session carries no HERDR_WORKSPACE_ID to fall back on` };
+		}
+		const label = `fleet: ${plan.ticket}`;
+		const created = await this.#herdr(["tab", "create", "--workspace", workspaceId, "--label", label, "--cwd", plan.worktree, "--no-focus"]);
+		if (!created.ok) return { ok: false, error: created.error };
+		const tab = parseTabCreate(created.stdout);
+		if (!tab) return { ok: false, error: "herdr tab create returned no tab or pane id" };
+		const run = await this.#herdr(["pane", "run", tab.paneId, paneRunCommand(plan.paths.scriptPath)]);
+		if (!run.ok) return { ok: false, error: run.error };
+		meta.pane = { workspaceId, tabId: tab.tabId, paneId: tab.paneId, label };
+		return { ok: true };
+	}
+
+	/** The workspace whose worktree is this path, else this session's own. */
+	async #workspaceFor(worktree: string): Promise<string | undefined> {
+		const listed = await this.#herdr(["workspace", "list"]);
+		if (listed.ok) {
+			const entries = parseWorkspaceList(listed.stdout);
+			const match = entries ? workspaceForWorktree(entries, worktree) : undefined;
+			if (match) return match;
+		}
+		const inherited = process.env.HERDR_WORKSPACE_ID?.trim();
+		return inherited === "" ? undefined : inherited;
+	}
+
+	/** One herdr CLI call. Any failure comes back as a message, never a throw. */
+	async #herdr(args: string[]): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
+		try {
+			const { stdout } = await execFileAsync(this.settings.herdrBin, args, { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
+			return { ok: true, stdout };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { ok: false, error: `${this.settings.herdrBin} ${args.join(" ")} failed: ${message}` };
+		}
+	}
+
+	/**
+	 * Start the job as pi's own detached child: the executor survives pi, the
+	 * disk records the evidence, and no pane is involved.
+	 */
+	#startSpawned(plan: Parameters<Supervisor["dispatch"]>[0], meta: JobMeta): void {
 		const stdout = openSync(plan.paths.stdoutPath, "w");
 		const stderr = openSync(plan.paths.stderrPath, "w");
 		try {
@@ -150,6 +236,9 @@ export class Supervisor {
 				// `contract_failed`; a bare exit event only marks the process done.
 				if (meta.state === "running") meta.state = code === 0 ? "complete" : "failed";
 				meta.finishedAt = Date.now();
+				// Same evidence a pane script writes: a later session settles from
+				// disk instead of guessing whether a dead pid meant success.
+				this.#writeExitCode(meta, code);
 				this.persist(meta);
 			});
 			child.once("error", (error) => {
@@ -166,22 +255,22 @@ export class Supervisor {
 			meta.contractError = `spawn failed: ${error instanceof Error ? error.message : String(error)}`;
 			meta.finishedAt = Date.now();
 		}
+	}
 
-		this.#jobs.set(meta.id, meta);
-		this.persist(meta);
-		if (meta.state === "running") {
-			this.#timers.set(
-				meta.id,
-				setTimeout(() => this.timeout(meta.id), plan.timeoutMs).unref(),
-			);
+	#writeExitCode(meta: JobMeta, code: number | null): void {
+		try {
+			writeFileSync(meta.paths.exitCodePath, `${code ?? "signal"}\n`, "utf8");
+		} catch {
+			// The dir vanished with the run; the in-memory state still reports itself.
 		}
-		return meta;
 	}
 
 	/** Kill a running job; SIGTERM first, SIGKILL after a short grace period. */
 	stop(id: string, graceMs = 5000): boolean {
 		const meta = this.#jobs.get(id);
 		const child = this.#children.get(id);
+		// A pane job has no child of ours to signal: stop it by Ctrl-C in the pane
+		// or by closing the tab (closeTab), which takes the shell and its child.
 		if (!meta || !child) return false;
 		const timer = this.#timers.get(id);
 		if (timer) clearTimeout(timer);
@@ -202,6 +291,33 @@ export class Supervisor {
 		this.persist(meta);
 	}
 
+	/** Tabs this session still owes the user: fleet panes nobody cleaned yet. */
+	listOpenTabs(): string[] {
+		const tabs = new Set<string>();
+		for (const meta of this.#jobs.values()) {
+			if (meta.pane && meta.paneClosedAt === undefined) tabs.add(meta.pane.tabId);
+		}
+		return [...tabs];
+	}
+
+	/**
+	 * Close one job's fleet tab after it settled. Only tabs this extension
+	 * created are ever closed, and never while the job still runs: the pane is
+	 * where the human reads the executor's output and checks file changes.
+	 */
+	async closeTab(id: string): Promise<{ ok: boolean; error?: string; alreadyClosed?: boolean }> {
+		const meta = this.#jobs.get(id);
+		if (!meta) return { ok: false, error: `unknown job "${id}"` };
+		if (!meta.pane) return { ok: false, error: "job did not run in a Herdr pane" };
+		if (meta.state === "running") return { ok: false, error: `job ${id} is still running in pane ${meta.pane.tabId}; harvest it first` };
+		if (meta.paneClosedAt !== undefined) return { ok: true, alreadyClosed: true };
+		const closed = await this.#herdr(["tab", "close", meta.pane.tabId]);
+		if (!closed.ok) return { ok: false, error: closed.error };
+		meta.paneClosedAt = Date.now();
+		this.persist(meta);
+		return { ok: true };
+	}
+
 	/**
 	 * Re-read a job from what the process and executor actually left on disk.
 	 * Resolves inherited jobs (pid dead, state still "running") and validates
@@ -217,6 +333,41 @@ export class Supervisor {
 		if (meta.state === "running") {
 			const child = this.#children.get(id);
 			const expired = Date.now() - meta.startedAt > meta.timeoutMs;
+			if (meta.runner === "pane") {
+				// The process pi spawned was the herdr CLI, which exits as soon as it
+				// has written the command into the pane. Its child handle and its pid
+				// say nothing about the executor, so the pane's own evidence decides:
+				// run.sh writes pid, then the exit code when the executor is done.
+				const code = existsSync(meta.paths.exitCodePath) ? readExitCodeText(readFileSync(meta.paths.exitCodePath, "utf8")) : undefined;
+				if (code !== undefined) {
+					meta.exitCode = code;
+					meta.state = code === 0 ? "complete" : "failed";
+					if (code !== 0) meta.contractError = `executor exited with code ${code} in pane ${meta.pane?.tabId ?? "?"}; the tab stays open so you can read what it printed`;
+					meta.finishedAt ??= Date.now();
+					this.persist(meta);
+					return this.settle(meta);
+				}
+				if (meta.pid === undefined && existsSync(meta.paths.pidPath)) {
+					meta.pid = readPidFromText(readFileSync(meta.paths.pidPath, "utf8"));
+				}
+				if (expired) {
+					// Past the ceiling the job settles as timeout without a kill: the
+					// recorded pid may already name a recycled process. Closing the tab
+					// (FleetCleanup) is what actually stops a pane executor.
+					meta.state = "timeout";
+					meta.contractError = `timed out after ${meta.timeoutMs}ms without an exit code; the executor may still be running in pane ${meta.pane?.tabId ?? "?"} — press Ctrl-C there or close the tab with FleetCleanup`;
+					meta.finishedAt ??= Date.now();
+					this.persist(meta);
+					return this.settle(meta);
+				}
+				// No pid file yet: run.sh has not started, or started a moment ago.
+				if (meta.pid === undefined || pidAlive(meta.pid)) return { outcome: { kind: "running" } };
+				meta.state = "failed";
+				meta.contractError = `the pane process ended without writing an exit code (the tab was closed, the shell died, or the machine rebooted); see pane ${meta.pane?.tabId ?? "?"}`;
+				meta.finishedAt ??= Date.now();
+				this.persist(meta);
+				return this.settle(meta);
+			}
 			if (expired && child === undefined) {
 				// Inherited from a dead session and past its wall-clock ceiling: no
 				// timer survives the session, so the ceiling is enforced here. The
@@ -232,13 +383,13 @@ export class Supervisor {
 			const alive = !expired && (child !== undefined || (meta.pid !== undefined && pidAlive(meta.pid)));
 			if (alive) return { outcome: { kind: "running" } };
 			// Inherited from a dead session: settle it from disk evidence.
-			const exitFile = `${dirname(meta.paths.metaPath)}/exit_code`;
+			const exitFile = meta.paths.exitCodePath;
 			if (existsSync(meta.paths.resultPath)) {
 				meta.state = "complete";
 				meta.exitCode = 0;
 			} else if (existsSync(exitFile)) {
-				const code = Number(readFileSync(exitFile, "utf8").trim());
-				meta.exitCode = Number.isFinite(code) ? code : null;
+				const code = readExitCodeText(readFileSync(exitFile, "utf8"));
+				meta.exitCode = code ?? null;
 				meta.state = code === 0 ? "complete" : "failed";
 			} else {
 				meta.state = "failed";

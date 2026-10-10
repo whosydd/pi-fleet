@@ -20,6 +20,8 @@ function settingsFor(dir: string): FleetSettings {
 		codexBin: "/bin/sh",
 		claudeBin: "claude",
 		gitGuard: true,
+		paneMode: "off",
+		herdrBin: "herdr",
 	};
 }
 
@@ -52,7 +54,7 @@ test("a compliant executor harvests to contract_complete", { timeout: 30_000 }, 
 	try {
 		const supervisor = new Supervisor(settingsFor(dir));
 		const plan = planFor(dir, "Build the login form at the auth seam.");
-		const meta = supervisor.dispatch(plan, plan.prompt);
+		const meta = await supervisor.dispatch(plan, plan.prompt);
 
 		assert.equal(await settle(supervisor, meta.id), "complete");
 		const report = supervisor.refresh(meta.id);
@@ -75,7 +77,7 @@ test("a zero exit with a broken contract is contract_failed, never complete", { 
 		const supervisor = new Supervisor(settingsFor(dir));
 		const plan = planFor(dir, "Build the thing.");
 		plan.command = ["node", FAKE, "--bad", "-o", plan.paths.resultPath];
-		const meta = supervisor.dispatch(plan, plan.prompt);
+		const meta = await supervisor.dispatch(plan, plan.prompt);
 
 		assert.equal(await settle(supervisor, meta.id), "contract_failed");
 		const report = supervisor.refresh(meta.id);
@@ -94,7 +96,7 @@ test("a second session rehydrates the job from disk", { timeout: 30_000 }, async
 	try {
 		const first = new Supervisor(settingsFor(dir));
 		const plan = planFor(dir, "Build the thing.");
-		const meta = first.dispatch(plan, plan.prompt);
+		const meta = await first.dispatch(plan, plan.prompt);
 		await settle(first, meta.id);
 
 		const second = new Supervisor(settingsFor(dir));
@@ -106,13 +108,13 @@ test("a second session rehydrates the job from disk", { timeout: 30_000 }, async
 	}
 });
 
-test("the concurrency cap rejects a dispatch past the limit", () => {
+test("the concurrency cap rejects a dispatch past the limit", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-cap-"));
 	try {
 		const supervisor = new Supervisor(settingsFor(dir));
 		const plan = planFor(dir, "Build the thing.");
 		plan.command = ["/bin/sh", "-c", "true"];
-		supervisor.dispatch(plan, plan.prompt);
+		await supervisor.dispatch(plan, plan.prompt);
 		const second = planDispatch(
 			{ ticket: "43", worktree: dir, executor: "codex", task_kind: "implement", brief: "Another one" },
 			settingsFor(dir),
@@ -125,13 +127,13 @@ test("the concurrency cap rejects a dispatch past the limit", () => {
 	}
 });
 
-test("persist survives a run dir removed while the job is still in flight", () => {
+test("persist survives a run dir removed while the job is still in flight", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-vanished-"));
 	try {
 		const supervisor = new Supervisor(settingsFor(dir));
 		const plan = planFor(dir, "Build the thing.");
 		plan.command = ["/bin/sh", "-c", "true"];
-		const meta = supervisor.dispatch(plan, plan.prompt);
+		const meta = await supervisor.dispatch(plan, plan.prompt);
 		rmSync(dir, { recursive: true, force: true });
 		// The exit handler runs this write after the dir is gone. Throwing there
 		// would kill the session over state that is lost anyway.
@@ -148,7 +150,7 @@ test("an inherited running job past its wall-clock ceiling settles as timeout", 
 		const first = new Supervisor(settingsFor(dir));
 		const plan = planFor(dir, "Build the thing.");
 		plan.command = ["/bin/sh", "-c", "sleep 3600"]; // hung executor, never finishes
-		const meta = first.dispatch(plan, plan.prompt);
+		const meta = await first.dispatch(plan, plan.prompt);
 
 		// Simulate a later session looking at a job well past its ceiling:
 		// rewind the start time on disk (the persisted meta is what a fresh
@@ -178,7 +180,7 @@ test("a claude job the provider refused reports the refusal, not an empty stderr
 		// its stdout envelope, exactly as a quota rejection does.
 		plan.executor = "claude";
 		plan.command = ["node", FAKE_CLAUDE_REFUSED];
-		const meta = supervisor.dispatch(plan, plan.prompt);
+		const meta = await supervisor.dispatch(plan, plan.prompt);
 
 		assert.equal(await settle(supervisor, meta.id), "failed");
 		const report = supervisor.refresh(meta.id);
