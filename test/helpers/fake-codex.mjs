@@ -5,11 +5,14 @@
 import { writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
+// The contract must answer the ticket the job was dispatched for, so the stand-in
+// reads it from the environment the test sets.
+const ticket = process.env.FAKE_TICKET || "42";
 const o = args.includes("-o") ? args[args.indexOf("-o") + 1] : undefined;
 const bad = args.includes("--bad");
 const payload = bad
 	? { oops: true }
-	: { ticket: "42", status: "implemented", branch: "fleet/42-b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } };
+	: { ticket, status: "implemented", branch: "fleet/42-b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } };
 
 if (o) writeFileSync(o, JSON.stringify(payload, null, 2));
 process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "t" }) + "\n");
