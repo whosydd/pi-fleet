@@ -17,9 +17,11 @@ import {
 	parsePaneSplit,
 	parseTabCreate,
 	parseWorkspaceList,
+	planPaneAction,
 	readExitCodeText,
 	resolvePaneMode,
 	workspaceForWorktree,
+	zoneOf,
 } from "../extensions/lib/panes.ts";
 import { Supervisor } from "../extensions/lib/supervise.ts";
 
@@ -231,6 +233,58 @@ test("a second job of one ticket splits the ticket tab instead of opening anothe
 		assert.equal(second.pane?.tabId, first.pane?.tabId);
 		assert.notEqual(second.pane?.paneId, first.pane?.paneId);
 		assert.notEqual(second.agentName, first.agentName);
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the ticket tab splits by zone: executors stack left, the reviewer sits right and stays", () => {
+	assert.equal(zoneOf("implement"), "exec");
+	assert.equal(zoneOf("implement"), "exec", "a fix round is still execution work");
+	assert.equal(zoneOf("review"), "review");
+
+	// The first executor opens the tab; there is nothing to split yet.
+	assert.deepEqual(planPaneAction("exec", { exec: [], review: [] }), { kind: "newTab" });
+	// Later executors stack downward in the left column, anchored on the last one.
+	assert.deepEqual(planPaneAction("exec", { exec: ["w1:p2"], review: [] }), { kind: "split", anchor: "w1:p2", direction: "down" });
+	assert.deepEqual(planPaneAction("exec", { exec: ["w1:p2", "w1:p3"], review: ["w1:p4"] }), { kind: "split", anchor: "w1:p3", direction: "down" });
+	// Past the fan-out limit the column stops growing and the ticket opens a new tab.
+	assert.deepEqual(planPaneAction("exec", { exec: ["w1:p2", "w1:p3", "w1:p4"], review: [] }), { kind: "newTab" });
+	// The reviewer splits right off the FIRST executor, so the whole left column
+	// keeps its width, and never disturbs executor panes.
+	assert.deepEqual(planPaneAction("review", { exec: ["w1:p2", "w1:p3"], review: [] }), { kind: "split", anchor: "w1:p2", direction: "right" });
+	// A re-review reuses the ticket's review pane instead of opening a third.
+	assert.deepEqual(planPaneAction("review", { exec: ["w1:p2"], review: ["w1:p5"] }), { kind: "reuse", paneId: "w1:p5" });
+	// A review with no executor pane to sit beside takes its own tab.
+	assert.deepEqual(planPaneAction("review", { exec: [], review: [] }), { kind: "newTab" });
+});
+
+test("reviewers share one pane across rounds: no second agent, the standing one gets the task", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-zone-"));
+	const log = join(dir, "herdr.log");
+	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir });
+	const settings = settingsFor(dir, { paneMode: "on" });
+	try {
+		const supervisor = new Supervisor(settings);
+		const build = await supervisor.dispatch(planFor(dir, settings, { ticket: "77" }), "brief");
+		const review = await supervisor.dispatch(planFor(dir, settings, { ticket: "77", task_kind: "review", base: "deadbeef" }), "brief");
+		const rerereview = await supervisor.dispatch(planFor(dir, settings, { ticket: "77", task_kind: "review", base: "deadbeef", fix_round: 1 }), "brief");
+
+		assert.equal(review.runner, "agent");
+		assert.equal(rerereview.runner, "agent");
+		// The reviewer anchors on the first executor pane and goes right.
+		const splits = herdrCalls(log).filter((call) => call.args[1] === "split");
+		assert.equal(splits.length, 1, "only the first review opened a pane");
+		assert.deepEqual(splits[0]!.args.slice(0, 3), ["pane", "split", build.pane!.paneId]);
+		assert.equal(splits[0]!.args[4], "right");
+		// The re-review reuses that pane and re-prompts the agent already in it.
+		assert.equal(rerereview.pane!.paneId, review.pane!.paneId);
+		assert.equal(rerereview.agentName, review.agentName);
+		const prompts = herdrCalls(log).filter((call) => call.args[1] === "prompt");
+		assert.equal(prompts.length, 3);
+		assert.equal(prompts[2]!.name, review.agentName);
+		assert.deepEqual(herdrCalls(log).filter((call) => call.args[1] === "start").length, 2, "the review pane holds one agent");
 	} finally {
 		restore();
 		rmSync(dir, { recursive: true, force: true });

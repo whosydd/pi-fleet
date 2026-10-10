@@ -23,16 +23,18 @@ import {
 	agentPromptArgv,
 	agentStartArgv,
 	agentWaitArgv,
-	paneDirection,
 	paneSplitArgv,
 	parseAgentGet,
 	parsePaneSplit,
 	parseTabCreate,
 	parseWorkspaceList,
+	planPaneAction,
 	readExitCodeText,
-	TAB_FANOUT_LIMIT,
 	workspaceForWorktree,
+	zoneOf,
 	type AgentRead,
+	type TabOccupancy,
+	type PaneZone,
 	type WorkspaceEntry,
 } from "./panes.ts";
 import { buildAgentPrompt, schemaFor } from "./profiles.ts";
@@ -209,16 +211,21 @@ export class Supervisor {
 			return { ok: false, error: `no Herdr workspace owns ${plan.worktree}, and this session carries no HERDR_WORKSPACE_ID to fall back on` };
 		}
 		const label = `fleet: ${plan.ticket}`;
-		const where = await this.#jobPane(plan.worktree, workspaceId, label);
+		const where = await this.#jobPane(plan.worktree, workspaceId, label, zoneOf(plan.taskKind));
 		if (!where.ok) return { ok: false, error: where.error };
-		const name = agentName(plan.ticket, nonceOf(plan.id));
-		const started = await this.#herdr(agentStartArgv(name, plan.executor, where.paneId, plan.model), START_GRACE_MS + this.settings.agentStartMs);
-		if (!started.ok) {
-			// No agent came up. If this job opened the tab, close it: an idle shell
-			// with no executor in it is litter. A tab that already hosted other jobs
-			// is left alone, because closing it would kill their panes too.
-			if (where.createdTab) void this.#herdr(["tab", "close", where.tabId]);
-			return { ok: false, error: started.error };
+		// A reused pane already holds an agent: the ticket's reviewer, kept alive
+		// across fix rounds so the re-review reads in the same place. It gets the new
+		// task by prompt, not a second agent in the same pane.
+		const name = where.existingAgent ?? agentName(plan.ticket, nonceOf(plan.id));
+		if (!where.existingAgent) {
+			const started = await this.#herdr(agentStartArgv(name, plan.executor, where.paneId, plan.model), START_GRACE_MS + this.settings.agentStartMs);
+			if (!started.ok) {
+				// No agent came up. If this job opened the tab, close it: an idle shell
+				// with no executor in it is litter. A tab that already hosted other jobs
+				// is left alone, because closing it would kill their panes too.
+				if (where.createdTab) void this.#herdr(["tab", "close", where.tabId]);
+				return { ok: false, error: started.error };
+			}
 		}
 		const task = buildAgentPrompt(
 			{ ticket: plan.ticket, worktree: plan.worktree, executor: plan.executor, taskKind: plan.taskKind, brief: plan.brief ?? plan.prompt, base: plan.base, skillPointer: plan.skillPointer, model: plan.model, fixRound: plan.fixRound },
@@ -238,14 +245,26 @@ export class Supervisor {
 	}
 
 	/** The pane this job should run in: reuse the ticket tab, or open a new one. */
-	async #jobPane(worktree: string, workspaceId: string, label: string): Promise<{ ok: true; tabId: string; paneId: string; createdTab: boolean } | { ok: false; error: string }> {
+	async #jobPane(worktree: string, workspaceId: string, label: string, zone: PaneZone): Promise<{ ok: true; tabId: string; paneId: string; createdTab: boolean; existingAgent?: string } | { ok: false; error: string }> {
 		const open = [...this.#jobs.values()].filter((job) => job.pane?.workspaceId === workspaceId && job.pane.label === label && job.paneClosedAt === undefined);
-		const host = open.at(-1)?.pane;
-		if (!host || open.length >= TAB_FANOUT_LIMIT) {
+		const tabId = open.at(-1)?.pane?.tabId;
+		const inTab = tabId ? open.filter((job) => job.pane?.tabId === tabId) : [];
+		const occupancy: TabOccupancy = {
+			exec: inTab.filter((job) => zoneOf(job.taskKind) === "exec").map((job) => job.pane!.paneId),
+			review: inTab.filter((job) => zoneOf(job.taskKind) === "review").map((job) => job.pane!.paneId),
+		};
+		const action = planPaneAction(zone, occupancy);
+		if (action.kind === "reuse") {
+			// The ticket's review pane persists across fix rounds, so the re-review
+			// reads in the same place the first review did.
+			const holder = inTab.find((job) => job.pane!.paneId === action.paneId && job.agentName);
+			return { ok: true, tabId: tabId!, paneId: action.paneId, createdTab: false, existingAgent: holder?.agentName };
+		}
+		if (action.kind === "newTab") {
 			const fresh = await this.#newTab(worktree, workspaceId, label);
 			return fresh.ok ? { ...fresh, createdTab: true } : fresh;
 		}
-		const split = await this.#herdr(paneSplitArgv(host.paneId, paneDirection(open.length - 1), worktree));
+		const split = await this.#herdr(paneSplitArgv(action.anchor, action.direction, worktree));
 		if (!split.ok) {
 			// The tab may be gone (closed by hand). A fresh tab is always valid.
 			const fresh = await this.#newTab(worktree, workspaceId, label);
@@ -253,7 +272,7 @@ export class Supervisor {
 		}
 		const paneId = parsePaneSplit(split.stdout);
 		if (!paneId) return { ok: false, error: "herdr pane split returned no pane id" };
-		return { ok: true, tabId: host.tabId, paneId, createdTab: false };
+		return { ok: true, tabId: tabId!, paneId, createdTab: false };
 	}
 
 	async #newTab(worktree: string, workspaceId: string, label: string): Promise<{ ok: true; tabId: string; paneId: string } | { ok: false; error: string }> {

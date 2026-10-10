@@ -18,7 +18,7 @@
  * the pane by eye.
  */
 
-import type { ExecutorKind, JobMeta, PaneTargets } from "./types.ts";
+import type { ExecutorKind, JobMeta, PaneTargets, TaskKind } from "./types.ts";
 
 export type PaneMode = "auto" | "on" | "off";
 
@@ -121,6 +121,48 @@ export function agentWaitArgv(name: string, timeoutMs: number): string[] {
 /** Split direction for the nth job in one tab: first sibling right, next below. */
 export function paneDirection(jobsAlreadyInTab: number): "right" | "down" {
 	return jobsAlreadyInTab === 0 ? "right" : "down";
+}
+
+/** Which side of a ticket's tab a job runs on: executors left, reviewers right. */
+export type PaneZone = "exec" | "review";
+
+/** The zone a task kind belongs to. A fix round is execution work, not a review. */
+export function zoneOf(taskKind: TaskKind): PaneZone {
+	return taskKind === "review" ? "review" : "exec";
+}
+
+/** Where the next job in a ticket's tab goes. */
+export type PaneAction =
+	| { kind: "newTab" }
+	| { kind: "split"; anchor: string; direction: "right" | "down" }
+	| { kind: "reuse"; paneId: string };
+
+/** The panes a ticket's tab already holds, by zone, newest last. */
+export type TabOccupancy = { exec: string[]; review: string[] };
+
+/**
+ * Place one job in a ticket's tab.
+ *
+ * The tab's first pane hosts the first executor, so the left column is
+ * executors and each later one stacks downward beside the same worktree. A
+ * reviewer splits right off the first executor and then stays put: fix rounds
+ * reuse that pane, so a human reads the review and the re-review in one place
+ * instead of chasing new tabs. Past `TAB_FANOUT_LIMIT` executors the column
+ * stops growing and a new tab opens.
+ *
+ * A reviewer with no executor to sit beside opens its own tab: a review of
+ * work nobody is watching does not deserve a borrowed column.
+ */
+export function planPaneAction(zone: PaneZone, tab: TabOccupancy): PaneAction {
+	if (zone === "review") {
+		const last = tab.review.at(-1);
+		if (last) return { kind: "reuse", paneId: last };
+		const anchor = tab.exec[0];
+		if (!anchor) return { kind: "newTab" };
+		return { kind: "split", anchor, direction: "right" };
+	}
+	if (tab.exec.length === 0 || tab.exec.length >= TAB_FANOUT_LIMIT) return { kind: "newTab" };
+	return { kind: "split", anchor: tab.exec.at(-1) ?? "", direction: "down" };
 }
 
 /** When a tab holds this many fleet jobs, open a new tab instead of splitting again. */
