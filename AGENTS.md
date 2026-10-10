@@ -42,6 +42,10 @@ interpretation functions over canned answers.
 - **Judgments are advisory and degradable.** A failed or missing classifier
   channel degrades to a note; it must never block a dispatch or a harvest.
   Thresholds live in code (settings), never in the model's discretion.
+- **Completion pings are advisory too.** A ping reports the exit code and points
+  at the harvest; it never states that the contract passed. An undeliverable
+  ping is dropped, and exactly one channel fires per job: the pane's own script
+  when the run lives in a pane, pi otherwise.
 - **The disk is the source of truth.** Jobs survive the session; harvests of
   inherited jobs settle from disk evidence. Never kill by recorded pid without
   the in-memory child handle: after a session is gone, the pid may name a

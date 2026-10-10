@@ -22,6 +22,7 @@ function settingsFor(dir: string): FleetSettings {
 		gitGuard: true,
 		paneMode: "off",
 		herdrBin: "herdr",
+		notify: true,
 	};
 }
 
@@ -190,6 +191,24 @@ test("a claude job the provider refused reports the refusal, not an empty stderr
 			assert.match(report.outcome.error, /quota insufficient/);
 			assert.doesNotMatch(report.outcome.error, /see .*stderr\.log/);
 		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a settled spawn job reports through the onSettled hook once", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-ping-"));
+	try {
+		const supervisor = new Supervisor(settingsFor(dir));
+		const plan = planFor(dir, "Build the thing.");
+		const seen: { id: string; state: string; exitCode: number | null | undefined }[] = [];
+		const meta = await supervisor.dispatch(plan, plan.prompt, undefined, (settled) => {
+			seen.push({ id: settled.id, state: settled.state, exitCode: settled.exitCode });
+		});
+
+		assert.equal(await settle(supervisor, meta.id), "complete");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.deepEqual(seen, [{ id: meta.id, state: "complete", exitCode: 0 }]);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

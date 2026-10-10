@@ -38,6 +38,8 @@
  *   PI_FLEET_PANES             auto (default) | on | off — run executors in
  *                              Herdr panes; auto means HERDR_ENV=1 only
  *   PI_FLEET_HERDR_BIN         herdr binary (default: herdr)
+ *   PI_FLEET_NOTIFY            on (default) | off — ping a human when an
+ *                              executor finishes
  *   PI_FLEET_GATE_FLOOR        noul hard floor, refuse below (default: 0.7)
  *   PI_FLEET_GATE_WARN         noul warn line (default: 0.85)
  *   PI_FLEET_TRIAGE_CONFIDENCE triage confidence floor (default: 0.8)
@@ -242,8 +244,22 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			const channelNote = gate.note ? `\nNote: ${gate.note}.` : "";
 
 			let meta: JobMeta;
+			// A finished executor must not go quiet. Pane jobs ping from inside their
+			// own script, so the ping survives this session; a detached spawn has no
+			// script, so pi pings it here when the child exits. Only one of the two
+			// channels ever fires for a given job.
+			const onSettled = (settled: JobMeta): void => {
+				if (!settings.notify || settled.runner === "pane") return;
+				const title = `fleet: ${settled.ticket} finished`;
+				const body = `exit code ${settled.exitCode ?? "signal"} — harvest to judge the contract`;
+				if (ctx.hasUI) {
+					ctx.ui.notify(`${title}: ${body}`, "info");
+					return;
+				}
+				void supervisor.notify(title, body);
+			};
 			try {
-				meta = await supervisor.dispatch(plan, args.brief, gateRecord);
+				meta = await supervisor.dispatch(plan, args.brief, gateRecord, onSettled);
 			} catch (error) {
 				return textResult(`dispatch failed: ${error instanceof Error ? error.message : String(error)}`, { status: "rejected" });
 			}

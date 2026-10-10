@@ -97,6 +97,7 @@ export class Supervisor {
 		},
 		brief: string,
 		gate?: JobMeta["gate"],
+		onSettled?: (meta: JobMeta) => void,
 	): Promise<JobMeta> {
 		// File prep can fail on a read-only state dir; surface a named error
 		// instead of a raw fs exception through the tool boundary.
@@ -108,7 +109,9 @@ export class Supervisor {
 			writeFileSync(plan.paths.schemaPath, JSON.stringify(schemaFor(plan.taskKind), null, 2), "utf8");
 			// run.sh records the exact command either way: a pane executes it, and a
 			// detached spawn leaves it behind as the reproducible form of the argv.
-			writeFileSync(plan.paths.scriptPath, runScript({ worktree: plan.worktree, command: plan.command, runDir: dirname(plan.paths.metaPath) }), "utf8");
+			// A pane pings the human itself, so the ping survives a dead session.
+			const notify = plan.pane && this.settings.notify ? { herdrBin: this.settings.herdrBin, title: `fleet: ${plan.ticket} finished` } : undefined;
+			writeFileSync(plan.paths.scriptPath, runScript({ worktree: plan.worktree, command: plan.command, runDir: dirname(plan.paths.metaPath), ...(notify ? { notify } : {}) }), "utf8");
 		} catch (error) {
 			throw new Error(
 				`cannot prepare the run dir under ${this.settings.stateDir}: ${error instanceof Error ? error.message : String(error)}. Check PI_FLEET_STATE_DIR is writable.`,
@@ -147,7 +150,7 @@ export class Supervisor {
 			meta.runner = "spawn";
 		}
 
-		this.#startSpawned(plan, meta);
+		this.#startSpawned(plan, meta, onSettled);
 		this.#register(meta);
 		return meta;
 	}
@@ -211,7 +214,7 @@ export class Supervisor {
 	 * Start the job as pi's own detached child: the executor survives pi, the
 	 * disk records the evidence, and no pane is involved.
 	 */
-	#startSpawned(plan: Parameters<Supervisor["dispatch"]>[0], meta: JobMeta): void {
+	#startSpawned(plan: Parameters<Supervisor["dispatch"]>[0], meta: JobMeta, onSettled?: (meta: JobMeta) => void): void {
 		const stdout = openSync(plan.paths.stdoutPath, "w");
 		const stderr = openSync(plan.paths.stderrPath, "w");
 		try {
@@ -240,6 +243,7 @@ export class Supervisor {
 				// disk instead of guessing whether a dead pid meant success.
 				this.#writeExitCode(meta, code);
 				this.persist(meta);
+				onSettled?.(meta);
 			});
 			child.once("error", (error) => {
 				this.#children.delete(plan.id);
@@ -289,6 +293,16 @@ export class Supervisor {
 		meta.state = "timeout";
 		meta.finishedAt = Date.now();
 		this.persist(meta);
+	}
+
+	/**
+	 * Ping a human through Herdr. Failures are silent by design: a notification
+	 * channel that is missing or out of reach must never disturb a dispatch or a
+	 * harvest, and no caller waits on the result.
+	 */
+	async notify(title: string, body: string): Promise<boolean> {
+		const sent = await this.#herdr(["notification", "show", title, "--body", body, "--sound", "done"]);
+		return sent.ok;
 	}
 
 	/** Tabs this session still owes the user: fleet panes nobody cleaned yet. */

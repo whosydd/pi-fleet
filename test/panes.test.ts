@@ -34,6 +34,7 @@ function settingsFor(dir: string, overrides: Partial<FleetSettings> = {}): Fleet
 		// stand-in, and pane mode stays off unless a test asks for it by name.
 		paneMode: "off",
 		herdrBin: FAKE_HERDR,
+		notify: true,
 		...overrides,
 	};
 }
@@ -50,7 +51,7 @@ function planFor(dir: string, settings: FleetSettings, overrides: Partial<Parame
 	return result.plan;
 }
 
-function herdrCalls(log: string): { args: string[]; command?: string; workspace?: string; tabId?: string }[] {
+function herdrCalls(log: string): { args: string[]; command?: string; workspace?: string; tabId?: string; title?: string; body?: string }[] {
 	if (!existsSync(log)) return [];
 	return readFileSync(log, "utf8")
 		.trim()
@@ -113,7 +114,27 @@ test("run.sh: bash shebang, quoted argv, split tees, exit_code written last", ()
 	// stdin closed: a pane TTY must never look like executor input.
 	assert.ok(script.includes("</dev/null"));
 	const lines = script.trimEnd().split("\n");
-	assert.equal(lines[lines.length - 1]!.startsWith(`echo "$ec" > '/state/runs/x/exit_code'`), true);
+	assert.equal(lines.at(-2), `echo "$ec" > '/state/runs/x/exit_code'`);
+	assert.equal(lines.at(-1), `exit "$ec"`);
+});
+
+test("run.sh: exit_code lands before the ping, and the script keeps the executor's status", () => {
+	const notify = { herdrBin: "/usr/local/bin/herdr", title: "fleet: 42 finished" };
+	const script = runScript({ worktree: "/wt/a", command: ["codex", "exec"], runDir: "/state/runs/x", notify });
+	const lines = script.trimEnd().split("\n");
+	const exitCodeLine = lines.findIndex((line) => line.startsWith(`echo "$ec" > '/state/runs/x/exit_code'`));
+	const pingLine = lines.findIndex((line) => line.includes("notification show"));
+	assert.ok(exitCodeLine >= 0 && pingLine === exitCodeLine + 1, "the ping follows the evidence, never precedes it");
+	assert.equal(lines[lines.length - 1], `exit "$ec"`);
+	assert.ok(script.includes(`'/usr/local/bin/herdr' notification show 'fleet: 42 finished'`));
+	assert.ok(script.includes('"finished with exit code $ec'));
+	assert.ok(script.includes("--sound done"));
+	// A dead notification channel must not change the run's status.
+	assert.ok(script.includes("|| true"));
+	// Notify off means no ping line at all.
+	const quiet = runScript({ worktree: "/wt/a", command: ["codex", "exec"], runDir: "/state/runs/x" });
+	assert.equal(quiet.includes("notification show"), false);
+	assert.equal(quiet.trimEnd().split("\n").at(-1), `exit "$ec"`);
 });
 
 test("run.sh executes for real: split logs, pid, and exit code land on disk", async () => {
@@ -126,7 +147,16 @@ test("run.sh executes for real: split logs, pid, and exit code land on disk", as
 		chmodSync(scriptPath, 0o755);
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
-		await promisify(execFile)("bash", [scriptPath]);
+		const run = promisify(execFile);
+		let status: number | undefined;
+		try {
+			await run("bash", [scriptPath]);
+		} catch (error) {
+			status = (error as { code?: number }).code;
+		}
+		// The script exits with the executor's code: the ping and the file writes
+		// must not steal it.
+		assert.equal(status, 3);
 		assert.equal(readFileSync(join(runDir, "stdout.log"), "utf8").trim(), "out-line");
 		assert.equal(readFileSync(join(runDir, "stderr.log"), "utf8").trim(), "err-line");
 		assert.equal(readExitCodeText(readFileSync(join(runDir, "exit_code"), "utf8")), 3);
@@ -136,6 +166,35 @@ test("run.sh executes for real: split logs, pid, and exit code land on disk", as
 		assert.equal(readExitCodeText("signal\n"), undefined);
 		assert.equal(readExitCodeText(""), undefined);
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("run.sh really pings through herdr after the evidence lands", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-ping-"));
+	const log = join(dir, "herdr.log");
+	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF" });
+	try {
+		const runDir = join(dir, "state", "runs", "j2");
+		mkdirSync(runDir, { recursive: true });
+		const scriptPath = join(runDir, "run.sh");
+		writeFileSync(
+			scriptPath,
+			runScript({ worktree: dir, command: ["/bin/sh", "-c", "echo hi; exit 5"], runDir, notify: { herdrBin: FAKE_HERDR, title: "fleet: 77 finished" } }),
+		);
+		chmodSync(scriptPath, 0o755);
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		await promisify(execFile)("bash", [scriptPath]).catch(() => undefined);
+		const calls = herdrCalls(log);
+		assert.deepEqual(calls.map((call) => `${call.args[0]} ${call.args[1]}`), ["notification show"]);
+		assert.equal(calls[0].title, "fleet: 77 finished");
+		// $ec expanded: the ping names the code the executor actually returned,
+		// and exit_code was already on disk when it fired.
+		assert.match(String(calls[0].args[4]), /exit code 5/);
+		assert.equal(readExitCodeText(readFileSync(join(runDir, "exit_code"), "utf8")), 5);
+	} finally {
+		restore();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -157,10 +216,11 @@ test("pane dispatch end-to-end: herdr tab created, script ran, harvest read exit
 		assert.ok(meta.pane?.tabId.startsWith("wF:"));
 		assert.equal(meta.paneFallback, undefined);
 
-		// Herdr saw exactly the three calls, in order, with the pane handed one
-		// short bash command.
+		// Herdr saw the three setup calls in order, with the pane handed one short
+		// bash command. A fourth call may already have landed: the finished script
+		// pings through the same CLI.
 		const calls = herdrCalls(log);
-		assert.deepEqual(calls.map((call) => `${call.args[0]} ${call.args[1]}`), ["workspace list", "tab create", "pane run"]);
+		assert.deepEqual(calls.slice(0, 3).map((call) => `${call.args[0]} ${call.args[1]}`), ["workspace list", "tab create", "pane run"]);
 		assert.match(calls[2]!.command!, /^bash '.*run\.sh'$/);
 
 		// The fake pane really started bash: settle on its own evidence.
@@ -279,4 +339,25 @@ test("herdr JSON parsers take the real shapes and fail closed on junk", () => {
 	assert.equal(workspaceForWorktree(list!, "/tmp/repo"), "w24");
 	assert.equal(workspaceForWorktree(list!, "/var/other"), undefined);
 	assert.equal(parseWorkspaceList("nope"), undefined);
+});
+
+test("supervisor.notify reaches herdr and never throws when the channel is down", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-notify-"));
+	const log = join(dir, "herdr.log");
+	try {
+		const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF" });
+		const supervisor = new Supervisor(settingsFor(dir, { herdrBin: FAKE_HERDR }));
+		assert.equal(await supervisor.notify("fleet: 42 finished", "exit code 0 — harvest to judge the contract"), true);
+		const call = herdrCalls(log).at(-1)!;
+		assert.deepEqual(call.args, ["notification", "show", "fleet: 42 finished", "--body", "exit code 0 — harvest to judge the contract", "--sound", "done"]);
+		restore();
+
+		// A dead notification channel returns false. It must not throw: the
+		// caller fires it and forgets, and no job waits on a ping.
+		const down = useEnv({ FAKE_HERDR_FAIL: "1", FAKE_HERDR_LOG: log });
+		assert.equal(await supervisor.notify("fleet: 42 finished", "exit code 0"), false);
+		down();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

@@ -111,6 +111,18 @@ herdr worktree create --cwd <repo> --branch fleet/<ticket> --label "fleet: <tick
 `herdr worktree open` does the same for a worktree that already exists. A plain
 `git worktree add` works too: the tab then lands in the session's own workspace.
 
+### Completion ping
+
+A finished executor pings instead of going quiet (`PI_FLEET_NOTIFY=off`
+stops it). A pane job pings from inside its own script, so the ping arrives
+even when the pi session is gone; a detached spawn pings through pi's UI, or
+through Herdr when pi runs headless. Exactly one channel fires per job.
+
+The wording is deliberate: the ping reports the exit code and points at the
+harvest. It never claims the contract passed — only `FleetHarvest` decides
+that. A ping that cannot be delivered is dropped in silence; the notification
+channel never blocks or fails a job.
+
 ## Result contract
 
 The executor's final output must be JSON matching the schema the extension
@@ -208,6 +220,7 @@ Environment, read once at load — reload pi to change it.
 | `PI_FLEET_CODEX_BIN` | `codex` | codex binary. |
 | `PI_FLEET_CLAUDE_BIN` | `claude` | claude binary. |
 | `PI_FLEET_HERDR_BIN` | `herdr` | herdr binary used for pane tabs and cleanup. |
+| `PI_FLEET_NOTIFY` | `on` | `off` stops the completion ping through the UI or Herdr. |
 | `PI_FLEET_GIT_GUARD` | `on` | `off` stops blocking `git stash`, `git commit --amend`, and force push. |
 | `PI_FLEET_PANES` | `auto` | Run executors in Herdr panes: `auto` = only when `HERDR_ENV=1`, `on` / `off` decide outright. |
 

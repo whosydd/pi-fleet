@@ -20,6 +20,7 @@ const settings: FleetSettings = {
 	gitGuard: true,
 	paneMode: "auto",
 	herdrBin: "herdr",
+	notify: true,
 };
 
 test("rejects dispatches missing each required field, with a field-naming message", () => {
@@ -128,4 +129,9 @@ test("readSettings falls back to defaults and honours overrides", () => {
 	assert.equal(readSettings({ PI_FLEET_GIT_GUARD: "off" }, "/proj").gitGuard, false);
 	const relative = readSettings({ PI_FLEET_STATE_DIR: "../state" }, "/proj/.worktrees/wt");
 	assert.equal(relative.stateDir, "/proj/.worktrees/state");
+	assert.equal(readSettings({}, "/proj").notify, true);
+	assert.equal(readSettings({ PI_FLEET_NOTIFY: "off" }, "/proj").notify, false);
+	assert.equal(readSettings({ PI_FLEET_PANES: "on" }, "/proj").paneMode, "on");
+	assert.equal(readSettings({ PI_FLEET_PANES: "garbage" }, "/proj").paneMode, "auto");
+	assert.equal(readSettings({ PI_FLEET_HERDR_BIN: "/opt/herdr" }, "/proj").herdrBin, "/opt/herdr");
 });

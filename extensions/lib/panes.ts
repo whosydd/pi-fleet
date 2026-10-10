@@ -75,6 +75,11 @@ export function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** A quoted path under the run dir. */
+function file(runDir: string, name: string): string {
+	return shellQuote(`${runDir}/${name}`);
+}
+
 /** The exact command text sent to a pane. One short call; nothing else. */
 export function paneRunCommand(runScriptPath: string): string {
 	return `bash ${shellQuote(runScriptPath)}`;
@@ -84,6 +89,31 @@ export interface RunScriptInput {
 	worktree: string;
 	command: string[];
 	runDir: string;
+	/** When set, the pane announces the finished run through Herdr. */
+	notify?: NotifyRequest;
+}
+
+/**
+ * A completion ping. The wording states the exit code and names the harvest as
+ * the thing that judges success: a finished executor is not a passed contract.
+ */
+export interface NotifyRequest {
+	herdrBin: string;
+	title: string;
+}
+
+/** The `exit_code` line, the notification line, and the script's own status. */
+function closingLines(input: RunScriptInput): string[] {
+	const lines = [`echo "$ec" > ${file(input.runDir, "exit_code")}`];
+	if (input.notify) {
+		// The ping states the exit code and points at the harvest: a finished
+		// executor is not a passed contract. `|| true` keeps a notification
+		// failure from changing the run's own status.
+		const body = `"finished with exit code $ec \u2014 harvest to judge the contract"`;
+		lines.push(`${shellQuote(input.notify.herdrBin)} notification show ${shellQuote(input.notify.title)} --body ${body} --sound done >/dev/null 2>&1 || true`);
+	}
+	lines.push(`exit "$ec"`);
+	return lines;
 }
 
 /**
@@ -100,15 +130,14 @@ export interface RunScriptInput {
 export function runScript(input: RunScriptInput): string {
 	const [bin, ...args] = input.command;
 	const quoted = [bin, ...args].map(shellQuote).join(" ");
-	const file = (name: string) => shellQuote(`${input.runDir}/${name}`);
 	return [
 		"#!/usr/bin/env bash",
 		"set -u",
-		`cd ${shellQuote(input.worktree)} || { echo 127 > ${file("exit_code")}; exit 127; }`,
-		`echo $$ > ${file("pid")}`,
-		`${quoted} </dev/null > >(tee ${file("stdout.log")}) 2> >(tee ${file("stderr.log")} >&2)`,
+		`cd ${shellQuote(input.worktree)} || { echo 127 > ${file(input.runDir, "exit_code")}; exit 127; }`,
+		`echo $$ > ${file(input.runDir, "pid")}`,
+		`${quoted} </dev/null > >(tee ${file(input.runDir, "stdout.log")}) 2> >(tee ${file(input.runDir, "stderr.log")} >&2)`,
 		"ec=$?",
-		`echo "$ec" > ${file("exit_code")}`,
+		...closingLines(input),
 		"",
 	].join("\n");
 }

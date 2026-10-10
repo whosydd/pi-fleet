@@ -4,6 +4,7 @@
 //   herdr tab create --workspace W --label L --cwd C --no-focus
 //   herdr pane run <pane_id> <command>
 //   herdr tab close <tab_id>
+//   herdr notification show <title> --body TEXT --sound done
 // Every call is appended as a JSON line to $FAKE_HERDR_LOG so tests can assert
 // the sequence. `pane run` starts the command detached and returns, exactly
 // like a real pane handoff: the script's own pid and exit_code files are the
@@ -60,6 +61,19 @@ if (group === "pane" && verb === "run") {
 	const child = spawn("bash", ["-c", command], { detached: true, stdio: "ignore" });
 	child.unref();
 	process.stdout.write(JSON.stringify({ id: "cli:pane:run", result: { type: "ok" } }) + "\n");
+	process.exit(0);
+}
+
+if (group === "notification" && verb === "show") {
+	const [title, ...flags] = rest;
+	record({ title });
+	const bodyIndex = flags.indexOf("--body");
+	process.stdout.write(
+		JSON.stringify({
+			id: "cli:notification:show",
+			result: { type: "notification_show", shown: true, reason: "shown", title, body: bodyIndex >= 0 ? flags[bodyIndex + 1] : null },
+		}) + "\n",
+	);
 	process.exit(0);
 }
 

@@ -90,12 +90,16 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   sandbox），归 #15。
   依赖：无。本轮需求：用户要看到 codex 在干什么，不要黑箱。
 
-- [ ] **#17 执行器完成通知**（本仓库）
+- [x] **#17 执行器完成通知**（本仓库）—— 已落地
   范围：`supervise.ts` 的 exit handler 接上通知回调。TUI/RPC 用 `ctx.ui.notify`，
   无头场景用 `herdr notification show <title> --sound done`。
   验收标准：派发后本轮结束，执行器退出时人能被提醒；pi 不在前台时不留静默。
   依赖：无（#26 已把可见性解决；剩下的只是“好了叫我”）。pane 模式下通知可以从
   `exit_code` 落盘触发，不依赖 child handle。
+  落地形态：pane job 的通知写在 run.sh 里（先 `exit_code` 落盘再发通知，
+  `|| true` 保命），所以 pi 会话已死也照样提醒；spawn job 由 exit handler 回调
+  `ctx.ui.notify`，无 UI 时走 `supervisor.notify()` 的 herdr 通道。两条路一个 job
+  只弹一次，文案只报退出码并指向收割，不声称契约过了。`PI_FLEET_NOTIFY=off` 全关。
 
 ## P2 — 工作流地基
 
@@ -184,6 +188,6 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 ## 下次开工入口
 
 #15 的四条腿已过三条（worktree + gate + 跨会话收割），执行器腿等 tierflow 额度
-恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。#24、#22 已落地。额度未
-恢复时做 #25 或 #23（#23 的 `.gitignore` 项先留着，它是 #15 的试金石票）。#16 和
-#17 继续等 #15 收尾。
+恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。#22、#24、#26、#17
+已落地。额度未恢复时做 #25 或 #23 剩下的 gate usage 一项（#23 的 `.gitignore`
+项先留着，它是 #15 的试金石票）。#16 继续等 #15 收尾。

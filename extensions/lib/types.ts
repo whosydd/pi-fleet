@@ -108,6 +108,8 @@ export interface FleetSettings {
 	/** Run executors in Herdr panes: auto = when this session sits in Herdr (HERDR_ENV=1). */
 	paneMode: "auto" | "on" | "off";
 	herdrBin: string;
+	/** Ping a human when an executor finishes (PI_FLEET_NOTIFY=off disables). */
+	notify: boolean;
 }
 
 export const EXECUTOR_KINDS: readonly ExecutorKind[] = ["codex", "claude"];
