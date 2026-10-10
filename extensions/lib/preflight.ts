@@ -14,9 +14,9 @@
  * When the state dir resolves outside the worktree, this module changes nothing.
  */
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { gitignoreLine } from "./plan.ts";
+import { gitignoreLine, linkIsIgnored } from "./plan.ts";
 
 export interface GitignoreFix {
 	/** The line appended to the worktree `.gitignore`, when it needed one. */
@@ -54,4 +54,48 @@ export function ensureStateDirIgnored(worktree: string, stateDir: string): Gitig
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
 	}
+}
+
+/** What the executor will find when it tries to run the project's checks. */
+export type DepsState =
+	/** No package.json: this project's checks are not Node's business. */
+	| "not-node"
+	| { state: "ready" }
+	| { state: "missing"; hint: string }
+	| { state: "untracked-link"; hint: string };
+
+/**
+ * Inspect a worktree's Node dependencies before dispatching into it.
+ *
+ * A worktree carries no `node_modules`, so an executor told to run
+ * `npm run check` fails on the environment and can burn a round discovering it.
+ * This reports the situation as a note; it never blocks a dispatch and never
+ * edits the project's `.gitignore`. Symlinking the parent checkout's
+ * `node_modules` is the usual fix, and it is the orchestrator's call — a
+ * dependency directory is the project's policy, unlike the fleet state dir, which
+ * this module does write.
+ */
+export function inspectNodeDeps(worktree: string): DepsState {
+	if (!existsSync(join(worktree, "package.json"))) return "not-node";
+	const modules = join(worktree, "node_modules");
+	if (!existsSync(modules)) {
+		return { state: "missing", hint: "no node_modules here: install them or symlink the main checkout's before the executor runs the project's checks" };
+	}
+	let isLink = false;
+	try {
+		isLink = lstatSync(modules).isSymbolicLink();
+	} catch {
+		isLink = false;
+	}
+	if (!isLink) return { state: "ready" };
+	// A link is not covered by a `node_modules/` pattern, so it shows up as
+	// untracked work the executor may commit with the ticket.
+	let content = "";
+	try {
+		content = readFileSync(join(worktree, ".gitignore"), "utf8");
+	} catch {
+		content = "";
+	}
+	if (linkIsIgnored(content, "node_modules")) return { state: "ready" };
+	return { state: "untracked-link", hint: "node_modules is a symlink and `node_modules/` in .gitignore does not cover a link: git status will show it as untracked, so expect it in the harvest diff or ignore the bare name" };
 }

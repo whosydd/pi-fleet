@@ -172,6 +172,24 @@ blocker ids and cycles come back as `Graph problems:` strings instead of droppin
 a ticket out of both sets in silence. The extension never owns ticket state — it
 reads the graph you hand it. Closing a ticket stays your tracker's job.
 
+### What the dispatch reports about the worktree
+
+Before a process exists, the dispatch inspects the checkout it is about to
+run in and says what it found:
+
+- the worktree's own `.gitignore` gets a line for the fleet state dir when it
+  lacks one, because run dirs are fleet artifacts (this is the only place a
+  dispatch writes into someone else's checkout);
+- Node dependencies are **reported, never prepared**. A worktree has no
+  `node_modules`, so `npm run check` fails on the environment and the executor
+  can spend a round discovering it. Installing them, or symlinking the main
+  checkout's, is the orchestrator's call — a dependency directory is the
+  project's own policy.
+- a symlinked `node_modules` is called out separately: git patterns ending in
+  `/` match directories only, so `node_modules/` does not cover a link and
+  `git status` shows it as untracked work. Expect it in the harvest diff, or
+  ignore the bare name.
+
 ## Result contract
 
 The executor's final output must be JSON matching the schema the extension

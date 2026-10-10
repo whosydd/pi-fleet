@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gitignoreLine, planDispatch, readSettings, type FleetSettings } from "../extensions/lib/plan.ts";
+import { gitignoreLine, linkIsIgnored, planDispatch, readSettings, type FleetSettings } from "../extensions/lib/plan.ts";
 
 const base = {
 	ticket: "42",
@@ -159,4 +159,15 @@ test("gitignoreLine: the state dir name decides the entry, not a hard-coded .fle
 	assert.equal(gitignoreLine("fleet-run/\n", "fleet-run"), undefined);
 	// An empty name would write a pattern that ignores the whole checkout.
 	assert.equal(gitignoreLine("", "/"), undefined);
+});
+
+test("a symlinked dependency dir needs the bare name in .gitignore", () => {
+	assert.equal(linkIsIgnored("node_modules\n", "node_modules"), true);
+	assert.equal(linkIsIgnored("/node_modules\n", "node_modules"), true, "an anchored pattern without a trailing slash still covers a link");
+	assert.equal(linkIsIgnored("/node_modules/\n", "node_modules"), false, "a trailing slash is directory-only, anchored or not");
+	assert.equal(linkIsIgnored("node_modules/\n", "node_modules"), false, "a directory-only pattern does not cover a link");
+	assert.equal(linkIsIgnored("# node_modules\n", "node_modules"), false, "a comment is not a rule");
+	assert.equal(linkIsIgnored("!node_modules\nnode_modules/\n", "node_modules"), false, "a negation is not coverage");
+	assert.equal(linkIsIgnored("dist\nnode_modules\n", "node_modules"), true);
+	assert.equal(linkIsIgnored("x", ""), false);
 });

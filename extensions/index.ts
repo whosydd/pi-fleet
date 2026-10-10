@@ -68,7 +68,7 @@ import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
 import { reportFrontier, type Ticket } from "./lib/frontier.ts";
 import { fixBriefFor, nextStep, reviewBriefFor } from "./lib/loop.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
-import { ensureStateDirIgnored } from "./lib/preflight.ts";
+import { ensureStateDirIgnored, inspectNodeDeps } from "./lib/preflight.ts";
 import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
 import { isExecutorKind, isTaskKind, type ExecutorKind, type JobMeta } from "./lib/types.ts";
 const DISPATCH_TOOL_DESCRIPTION = `Dispatch a one-shot executor (codex exec or claude -p) to implement or review one ticket in its own git worktree. Detached: returns a job id immediately; harvest with FleetHarvest on a later turn.
@@ -258,6 +258,11 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			// preflight fix is housekeeping, so an unwritable .gitignore degrades
 			// to a note instead of blocking the job.
 			const gitignoreFix = ensureStateDirIgnored(args.worktree, settings.stateDir);
+			// Dependencies are reported, never fixed: preparing them is the
+			// orchestrator's call, and a missing node_modules otherwise costs the
+			// executor a round on the environment instead of on the ticket.
+			const deps = inspectNodeDeps(args.worktree);
+			const depsNote = typeof deps === "object" && "hint" in deps ? `\nNote: ${deps.hint}` : "";
 			const gitignoreNote = gitignoreFix.appended
 				? `\nGitignore: appended "${gitignoreFix.appended}" to ${join(args.worktree, ".gitignore")} — that uncommitted line is fleet housekeeping, not the ticket's work; expect it in the harvest diff.`
 				: gitignoreFix.error
@@ -296,8 +301,8 @@ export default function fleetExtension(pi: ExtensionAPI) {
 					? `\nInteractive dispatch unavailable, running detached instead: ${meta.paneFallback}`
 					: "";
 			return textResult(
-				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}${paneNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${gitignoreNote}${skill}`,
-				{ status: "dispatched", jobId: meta.id, ticket: meta.ticket, runDir: `${settings.stateDir}/runs/${meta.id}`, gate: gateRecord, pane: meta.pane, paneFallback: meta.paneFallback },
+				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}${paneNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${gitignoreNote}${depsNote}${skill}`,
+				{ status: "dispatched", jobId: meta.id, ticket: meta.ticket, runDir: `${settings.stateDir}/runs/${meta.id}`, gate: gateRecord, pane: meta.pane, paneFallback: meta.paneFallback, deps },
 			);
 		},
 	});

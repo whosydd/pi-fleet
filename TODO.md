@@ -245,11 +245,17 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   顺带修掉的：`persist` 在 run dir 已消失时抛 ENOENT，异常跑出 exit handler 会把会话
   带死（`88973b2`）。这条竞争是 #24 的新测试推出来的。
 
-- [ ] **#25 worktree 依赖准备**（文档或代码，落点待定）
-  范围：worktree 不带 `node_modules`，执行器跑不了 `npm run check`。当前手工
-  `ln -s` 可行，但仓库 `.gitignore` 写的是 `node_modules/`（带斜杠只匹配目录），
-  符号链接会被 `git status` 报成未跟踪，执行器可能把它提交进去。
-  验收标准：派发到 Node 项目的 worktree 里，依赖就绪且 `git status` 干净。
+- [x] **#25 worktree 依赖准备**（本仓库）—— 已落地：**报告，不动手**
+  范围：worktree 不带 `node_modules`，执行器跑不了 `npm run check`；手工 `ln -s`
+  可行，但仓库 `.gitignore` 写的是 `node_modules/`（尾斜杠只匹配目录），符号链接会
+  被 `git status` 报成未跟踪，执行器可能把它一起提交。
+  决定：fleet 只在派发结果里报告环境（`inspectNodeDeps`，`preflight.ts`），不装依赖、
+  不改项目的 `.gitignore`。理由是分工：`.fleet/` 是 fleet 自家产物，所以那个写；
+  依赖目录是**项目自己的政策**，改它等于越界。准备动作归编排者（人或外层脚本）。
+  三种状态：非 Node 项目 → 不吭声；缺依赖 → note 提示装或链；链且只被 `node_modules/`
+  覆盖 → note 点明「git status 会报未跟踪，期望它出现在收割 diff 里，或改用裸名」。
+  纯判定在 `plan.ts` 的 `linkIsIgnored`（尾斜杠 = 只匹配目录，符号链接对 git 不是目录），
+  所以符号链接这条规则有测试：`test/plan.test.ts`、`test/preflight.test.ts`。
   依赖：无。#15 现场发现。
 
 - [x] **#22 pi 侧危险 git 拦截**（本仓库）—— 已落地

@@ -5,11 +5,11 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { ensureStateDirIgnored } from "../extensions/lib/preflight.ts";
+import { ensureStateDirIgnored, inspectNodeDeps } from "../extensions/lib/preflight.ts";
 
 function worktree(): string {
 	return mkdtempSync(join(tmpdir(), "pi-fleet-ignore-"));
@@ -77,5 +77,44 @@ test("a PI_FLEET_STATE_DIR outside the worktree changes nothing", () => {
 		assert.equal(ensureStateDirIgnored(dir, "var/fleet-state").appended, "fleet-state/");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("dependency prep is reported, never fixed", () => {
+	// A non-Node checkout is not the fleet's question at all.
+	const plain = mkdtempSync(join(tmpdir(), "pi-fleet-deps-plain-"));
+	try {
+		assert.equal(inspectNodeDeps(plain), "not-node");
+	} finally {
+		rmSync(plain, { recursive: true, force: true });
+	}
+
+	// A worktree with no dependencies: say so before the executor spends a round.
+	const bare = mkdtempSync(join(tmpdir(), "pi-fleet-deps-bare-"));
+	try {
+		writeFileSync(join(bare, "package.json"), "{}");
+		const state = inspectNodeDeps(bare);
+		assert.equal(typeof state, "object");
+		assert.equal((state as { state: string }).state, "missing");
+		assert.match((state as { hint: string }).hint, /node_modules/);
+	} finally {
+		rmSync(bare, { recursive: true, force: true });
+	}
+
+	// A symlink with only `node_modules/` in .gitignore reads as untracked work.
+	const linked = mkdtempSync(join(tmpdir(), "pi-fleet-deps-link-"));
+	try {
+		writeFileSync(join(linked, "package.json"), "{}");
+		const target = mkdtempSync(join(tmpdir(), "pi-fleet-deps-target-"));
+		symlinkSync(target, join(linked, "node_modules"));
+		writeFileSync(join(linked, ".gitignore"), "node_modules/\n");
+		const state = inspectNodeDeps(linked);
+		assert.equal((state as { state: string }).state, "untracked-link");
+		// The bare name covers a link, so the note goes away once it is ignored.
+		writeFileSync(join(linked, ".gitignore"), "node_modules\n");
+		assert.deepEqual(inspectNodeDeps(linked), { state: "ready" });
+		rmSync(target, { recursive: true, force: true });
+	} finally {
+		rmSync(linked, { recursive: true, force: true });
 	}
 });

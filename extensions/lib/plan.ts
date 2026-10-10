@@ -224,3 +224,31 @@ export function planDispatch(params: DispatchParams, settings: FleetSettings, ct
 export { schemaFor };
 
 export type { FleetSettings };
+
+/**
+ * Whether a `.gitignore` covers a path that is a symlink rather than a directory.
+ *
+ * `node_modules/` matches a directory only, so the common project pattern leaves
+ * a symlinked dependency dir showing as untracked work in `git status` — noise an
+ * executor may commit with the ticket. The bare name (with or without a leading
+ * slash) is what covers a link.
+ *
+ * Text only, like `gitignoreLine`: the caller inspects the filesystem. The fleet
+ * reports this instead of fixing it, because a dependency directory is the
+ * project's own policy, not a fleet artifact like the state dir.
+ */
+export function linkIsIgnored(content: string, name: string): boolean {
+	const wanted = name.trim().replace(/^\/+|\/+$/g, "");
+	if (!wanted) return false;
+	return content
+		.split(/\r?\n/)
+		.some((entry) => {
+			const text = entry.trim();
+			if (text === "" || text.startsWith("#") || text.startsWith("!")) return false;
+			// A pattern that ends in a slash matches directories only, and to git a
+			// symlink is not a directory: `node_modules/` leaves a linked
+			// node_modules showing as untracked work.
+			if (text.endsWith("/")) return false;
+			return text.replace(/^\/+/, "") === wanted;
+		});
+}
