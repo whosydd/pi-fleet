@@ -78,7 +78,7 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 ## P1 — 编排闭环
 
-- [ ] **#30 契约的 ticket 与作业的 ticket 不比对**（本仓库）
+- [x] **#30 契约的 ticket 与作业的 ticket 不比对**（本仓库）—— 已落地
   现场：票号 `23-gitignore`，codex 契约写 `ticket: "#23"`，`validateContract` 只查
   「非空字符串」，照样 `contract_complete`。编排者据契约判断「这张票做完了」时读的
   是执行器自己抄的字符串。
@@ -89,7 +89,7 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   误伤率为零（执行器爱写 `#42`，这不是失败）。
   依赖：无。
 
-- [ ] **#31 triage 文案里 style 计数可能是负数**（本仓库）
+- [x] **#31 triage 文案里 style 计数可能是负数**（本仓库）—— 已落地
   现场：真 findings 第一轮 triage 输出「1 blocker、6 待人工确认」，style 计数显示
   `-1`。算式是 `total - blockers - uncertain`，而 uncertain 与 blocker 可以重叠
   （一个 verdict 既 blocker 又低置信），于是被减两次。
@@ -289,9 +289,11 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
    `preflight.ts` 那句过时注释已改写成仍然成立的理由。#23 的 `.gitignore` 项已关闭。
    另一处发现：仓库根其实是 `packages/pi-fleet` 本身，所以 p23 那个 worktree 落在
    **仓库外面**，不是「在项目文件夹里」——新票改用 `herdr worktree create` 顺带解决。
-2. **真执行器跑一轮链**：现成输入是这次真评审的两条 findings（preflight 的 catch
+2. ~~#30 / #31~~ 已落地：`ticketsMatch` 让 `#23` 与 `23-gitignore` 算同一张票
+   （前缀只在连字符处断开才算数，`230` 对 `23` 不算），`summarizeTriage` 把
+   blocker/style/ignore 算成互斥分区、uncertain 单独报数。
+3. **真执行器跑一轮链**：现成输入是这次真评审的两条 findings（preflight 的 catch
    分支无测试；#23 三项只交付了 `.gitignore` 一项）。看链能否自动起 fix 轮。
-3. **#30 / #31**：都是这轮现场抓出来的小口，纯函数改动，无需额度。
 4. #16 frontier 暴露给模型（等 #15 收尾——现已可动）。#25 worktree 依赖准备。
    #23 剩 gate 的 classify usage 记账。
 
