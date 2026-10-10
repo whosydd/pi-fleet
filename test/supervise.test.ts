@@ -122,6 +122,23 @@ test("the concurrency cap rejects a dispatch past the limit", () => {
 	}
 });
 
+test("persist survives a run dir removed while the job is still in flight", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-vanished-"));
+	try {
+		const supervisor = new Supervisor(settingsFor(dir));
+		const plan = planFor(dir, "Build the thing.");
+		plan.command = ["/bin/sh", "-c", "true"];
+		const meta = supervisor.dispatch(plan, plan.prompt);
+		rmSync(dir, { recursive: true, force: true });
+		// The exit handler runs this write after the dir is gone. Throwing there
+		// would kill the session over state that is lost anyway.
+		supervisor.persist(meta);
+		assert.equal(supervisor.get(meta.id)?.state, "running");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("an inherited running job past its wall-clock ceiling settles as timeout", { timeout: 30_000 }, async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-expired-"));
 	try {

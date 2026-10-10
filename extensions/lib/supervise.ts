@@ -327,7 +327,15 @@ export class Supervisor {
 	}
 
 	persist(meta: JobMeta): void {
-		writeFileSync(meta.paths.metaPath, JSON.stringify(meta, null, 2), "utf8");
+		try {
+			writeFileSync(meta.paths.metaPath, JSON.stringify(meta, null, 2), "utf8");
+		} catch (error) {
+			// A run dir that vanished mid-flight (a cleaned worktree, a removed state
+			// dir) loses its own state anyway. Only ENOENT is tolerated: the write must
+			// not throw out of an exit handler, where nothing catches it and the session
+			// dies with it. Anything else is a real fault and must surface.
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
 	}
 
 	persistAll(): void {
