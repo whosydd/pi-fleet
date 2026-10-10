@@ -53,6 +53,9 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
     dir 在编排者仓库的 `.fleet/` 下）。`--output-schema` 读工作区外文件已实测可行。
     若写不了，改法是 run dir 落进 worktree 或从 stdout 提取契约——`JobMeta` 里的
     `diskPath` 与 `resultSource` 字段是这条路的遗留，代码目前未使用。
+  - 试金石场子已备好，补跑直接用：worktree `/Users/gy/Code/pi/.worktrees/p23`（分支
+    `fleet/p23-gitignore`，`node_modules` 是指向主仓库的符号链接），brief 在
+    `/tmp/p23-brief.md`（重启会没，下文四项要求照旧重写即可）。
 
 ## P1 — 编排闭环
 
@@ -130,10 +133,11 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   词不误伤），接线同时盖 `tool_call`（模型的 bash 工具）与 `user_bash`（用户的 `!`），
   `PI_FLEET_GIT_GUARD=off` 可关。真会话实测：`git stash list` 被拦，回原因与替代命令。
 
-- [ ] **#23 小项打包**（本仓库）
-  gate 的 classify usage 附进 dispatch 结果；`test/plan.test.ts` 补 claude implement
-  的 argv 正向断言（`-p`、`--output-format`、`--json-schema`）；`.fleet/` 在首次
-  派发时自动写入项目 `.gitignore`。
+- [ ] **#23 小项打包**（本仓库）—— 剩两项
+  gate 的 classify usage 附进 dispatch 结果（已完成：claude implement 的 argv 正向
+  断言已进 `test/plan.test.ts`，含 schema 无 `format` 关键字这一条）。`.fleet/` 在首次
+  派发时自动写入项目 `.gitignore` 这一项先留着：它就是 #15 的试金石票，自己实现掉
+  就没票可跑了。
   另记一项不一致：`profiles.ts` 的注释说 codex 走 `--json` 向 stdout 流事件，
   argv 里实际没有 `--json`，README 也没写。改代码或改注释，不能两边都留着。
   写法提醒（#15 现场）：`.gitignore` 里 `node_modules/` 这种带尾斜杠的模式
