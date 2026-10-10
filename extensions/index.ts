@@ -437,6 +437,11 @@ export default function fleetExtension(pi: ExtensionAPI) {
 				}
 			}
 
+			// Learning that a contract passed is the loop's real trigger, whichever path
+			// noticed: a settle event, a manual harvest, or a contract file that landed
+			// after the job was already reported as failed. advanceChain guards against
+			// re-entering itself through this same harvest call.
+			if (settings.loop) void advanceChain(ctx, jobId);
 			return textResult(
 				`${jobId} contract_complete (executor ${meta.executor}/${meta.taskKind}).\n\n${contractText}\n\nRun dir: ${meta.paths.metaPath.replace(/\/meta\.json$/, "")}\nNext: for an implement job, close the ticket and dispatch the next ready one; for a review job, fold both axes into your report without merging them.${triageNote}`,
 				{ status: "contract_complete", jobId, contract, triage: triageRecords },
@@ -451,6 +456,8 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	 */
 	const CHAIN_DISPATCH_BUDGET = 6;
 	const chainHops = new Map<string, number>();
+	/** Job ids whose chain step is in flight: the harvest tool re-enters the loop. */
+	const chainBusy = new Set<string>();
 
 	/** The harness that did not write the code under review. */
 	function otherExecutor(executor: ExecutorKind): ExecutorKind {
@@ -487,6 +494,19 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	 * to a note instead of inventing a round.
 	 */
 	async function advanceChain(ctx: ChainCtx, jobId: string): Promise<void> {
+		// advanceChain harvests through the tool, and the harvest tool advances the
+		// chain: the guard is what keeps those two from calling each other forever.
+		if (chainBusy.has(jobId)) return;
+		chainBusy.add(jobId);
+		try {
+			await advanceChainOnce(ctx, jobId);
+		} finally {
+			chainBusy.delete(jobId);
+		}
+	}
+
+	/** One turn of the loop. Called only through advanceChain, which holds the guard. */
+	async function advanceChainOnce(ctx: ChainCtx, jobId: string): Promise<void> {
 		const job = supervisor.get(jobId);
 		if (!job) return;
 		const ticket = job.ticket;
