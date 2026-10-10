@@ -291,24 +291,37 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 ## 下次开工入口
 
-#15 四条腿全过（worktree、gate 正反、跨会话收割、codex 交互 + claude 契约）。
-#28 布局与 #29 循环已落地并用 stand-in 验过。剩下的按顺序：
+**链已在真执行器上跑通一轮**（本仓库，2026-10-10 夜）：codex implement（TUI）→
+契约 → 链自动派 claude review（同一张票 tab 的右 pane）→ 评审契约 1 条 finding →
+真 Jev triage 判 `ignore`（低置信，交人读）→ 无 blocker → 收敛 ping。
+执行器写的三个提交（`badbb2e`/`bf49e18`/`66b34db`）已并入 main（`ce981a6`），
+现场已清（worktree/分支/5 个 tab 全关）。
 
-1. ~~合并票分支~~ 已做（`a4a37a7`）：三文件冲突全是「两边都保留」——
-   `gitignoreLine` 与 `parsePaneMode` 并列，派发结果同时带 pane note、gitignore
-   note 与 pane 字段。合并树 87 测试全绿（main 77 + 分支 10）。
-   `preflight.ts` 那句过时注释已改写成仍然成立的理由。#23 的 `.gitignore` 项已关闭。
-   另一处发现：仓库根其实是 `packages/pi-fleet` 本身，所以 p23 那个 worktree 落在
-   **仓库外面**，不是「在项目文件夹里」——新票改用 `herdr worktree create` 顺带解决。
-2. ~~#30 / #31~~ 已落地：`ticketsMatch` 让 `#23` 与 `23-gitignore` 算同一张票
-   （前缀只在连字符处断开才算数，`230` 对 `23` 不算），`summarizeTriage` 把
-   blocker/style/ignore 算成互斥分区、uncertain 单独报数。
-3. **真执行器跑一轮链**：现成输入是这次真评审的两条 findings（preflight 的 catch
-   分支无测试；#23 三项只交付了 `.gitignore` 一项）。看链能否自动起 fix 轮。
-4. #25 worktree 依赖准备。
-   #23 剩 gate 的 classify usage 记账。
+本轮现场纠正的三条（都已落代码 + 测试）：
 
-现场遗留：workspace `w29` = worktree `/Users/gy/Code/pi/.worktrees/p23`，
-tab `w29:t3`（codex implement，idle 等你读）、`w29:t5`（claude review，idle）。
-`FleetCleanup` 归你决定何时关。新票的 worktree 一律 `herdr worktree create`，
-别再手摆路径（p23 那个在 pi 仓库树内，是遗产）。
+1. **`idle` 不是失败**（`e415a08`）。交互 agent 中途 idle 属常态：codex 被判
+   `contract_failed` 后照样提交了，claude 被判失败时仍在 working。现在空闲起
+   2 分钟宽限（`PI_FLEET_IDLE_GRACE_MS`），agent 一复工就清零；消失仍立即失败。
+2. **契约合法 ≠ 工作落地**（`eca329a`）。`status: blocked`、零 commit 的 implement
+   不再换来一轮评审。
+3. **链的触发点是「契约过了」而不是「进程结算」**（`355a531`）。迟到契约、换会话
+   都靠它接上；带重入保护。
+4. 清场顺手修的：同一 tab 的多个 job 被重复关闭（`0181d70`）；`#herdr` 丢掉
+   herdr 自己的错误 JSON，只剩 "Command failed"。
+
+已知环境约束（fleet 不改，因为你要求 argv 不带权限 flag）：
+
+- **one-shot 提交不了**：worktree 的 git 元数据在 workspace 之外，
+  `--sandbox workspace-write` 写不了 → codex 只能回 `blocked`。要无人值守也能提交，
+  得在 codex 配置里放宽 `writable_roots`；交互模式靠人在 pane 里批。
+- **tierflow 的 TUI 请求会间歇 400**（`invalid_task_request`，同一 `responses` 端点，
+  `codex exec` 用同一段文本从不触发；实测往 pane 里递一句「继续」即可续上）。
+  是提供方对 TUI 那条请求构造的校验，不是我们文本长度。
+
+待定（等你拍）：
+
+- **任务文本精简**：现在 2035 字符里约 1200 是内联 schema；schema 的权威副本本来
+  就在 run dir 的 `schema.json`，可改成「读它」的指路式（约 700 字符）。改动落在
+  `profiles.ts` + `test/panes.test.ts` 断言。
+- **#18 / #19 / #20 / #21**：skills 双侧安装、`/setup-matt-pocock-skills`、
+  pi 侧 AGENTS.md 规则集、implement-spec 外层循环规则化（属 `pi-mattpocock-skills`）。
