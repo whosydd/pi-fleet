@@ -11,6 +11,11 @@ Tests must not hit the network: executor calls are faked with a stand-in that
 honours the same argv (`-o`), and classifier calls are covered by pure
 interpretation functions over canned answers.
 
+## Roadmap
+
+- Unfinished work lives in `TODO.md`. The next session starts at P0 (#15, a
+  real-ticket end-to-end run); #16 and #17 depend on it.
+
 ## Layout
 
 - `extensions/index.ts` — pi extension entry: tool registration, gate and
