@@ -76,6 +76,22 @@ test("a plan carries argv for the right executor and a prompt with the anti-recu
 		assert.ok(codex.plan.prompt.includes("Do not close or edit the tracker ticket"));
 	}
 
+	const implement = planDispatch({ ...base, executor: "claude" }, settings, { runningCount: 0 });
+	assert.equal(implement.ok, true);
+	if (implement.ok) {
+		const argv = implement.plan.command;
+		// claude -p takes the prompt as a positional argument and shapes only the
+		// output: the supervisor reads structured_output back out of stdout.
+		assert.equal(argv[0], "claude");
+		assert.equal(argv[1], "-p");
+		assert.match(argv[2]!, /You are a fleet executor/);
+		assert.equal(argv[argv.indexOf("--output-format") + 1], "json");
+		const schema = JSON.parse(argv[argv.indexOf("--json-schema") + 1]!);
+		assert.deepEqual(schema.required, ["ticket", "status", "branch", "commits", "tests"]);
+		// The schema carries no `format` keyword: claude treats it as an annotation.
+		assert.equal(JSON.stringify(schema).includes("\"format\""), false);
+	}
+
 	const review = planDispatch({ ...base, executor: "claude", task_kind: "review", base: "main" }, settings, { runningCount: 0 });
 	assert.equal(review.ok, true);
 	if (review.ok) {
