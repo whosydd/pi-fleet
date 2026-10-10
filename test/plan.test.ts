@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planDispatch, readSettings } from "../extensions/lib/plan.ts";
+import { gitignoreLine, planDispatch, readSettings } from "../extensions/lib/plan.ts";
 
 const base = {
 	ticket: "42",
@@ -104,4 +104,27 @@ test("readSettings falls back to defaults and honours overrides", () => {
 	const overridden = readSettings({ PI_FLEET_MAX_CONCURRENCY: "9", PI_FLEET_STATE_DIR: "/tmp/fleet-state" });
 	assert.equal(overridden.maxConcurrent, 9);
 	assert.equal(overridden.stateDir, "/tmp/fleet-state");
+});
+
+test("gitignoreLine: an empty .gitignore gets the state dir with a trailing slash", () => {
+	assert.equal(gitignoreLine("", ".fleet"), ".fleet/");
+});
+
+test("gitignoreLine: a file that already lists .fleet/ is covered", () => {
+	assert.equal(gitignoreLine("node_modules/\n.fleet/\nsession.jsonl\n", ".fleet"), undefined);
+});
+
+test("gitignoreLine: a bare .fleet entry is covered too, no second line", () => {
+	assert.equal(gitignoreLine("node_modules/\n.fleet\n", ".fleet"), undefined);
+});
+
+test("gitignoreLine: an unrelated directory does not cover the state dir", () => {
+	assert.equal(gitignoreLine("node_modules/\n*.log\n", ".fleet"), ".fleet/");
+});
+
+test("gitignoreLine: the state dir name decides the entry, not a hard-coded .fleet", () => {
+	assert.equal(gitignoreLine("state/\n", "fleet-run"), "fleet-run/");
+	assert.equal(gitignoreLine("fleet-run/\n", "fleet-run"), undefined);
+	// An empty name would write a pattern that ignores the whole checkout.
+	assert.equal(gitignoreLine("", "/"), undefined);
 });

@@ -3,8 +3,9 @@
  *
  * Pure: no fs, no process spawning, no pi imports, so the validation rules and
  * the exact wording of every rejection can be tested without a model call.
- * Filesystem preflight (worktree exists, git repo) happens in index.ts right
- * before dispatch; this module judges the parameters.
+ * Filesystem preflight (worktree exists, is a git repo, ignores the state dir)
+ * happens in index.ts and lib/preflight.ts right before dispatch; this module
+ * judges the parameters and the text those checks act on.
  */
 
 import { buildArgv, buildPrompt, schemaFor } from "./profiles.ts";
@@ -65,6 +66,28 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env): FleetSetting
 function parsePositive(value: string | undefined, fallback: number): number {
 	const parsed = Number(value);
 	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+/**
+ * The line a worktree's `.gitignore` needs so fleet run dirs never read as
+ * untracked executor work. `stateDirName` is the state dir basename — `.fleet`
+ * under the default `PI_FLEET_STATE_DIR`.
+ *
+ * It judges text only; the caller reads and writes the file. The basename is
+ * matched with and without a trailing slash, so a checkout that already covers
+ * the directory is left exactly as it is.
+ */
+export function gitignoreLine(content: string, stateDirName: string): string | undefined {
+	const name = stateDirName.trim().replace(/\/+$/, "");
+	if (!name) return undefined;
+	const line = `${name}/`;
+	const covered = content
+		.split(/\r?\n/)
+		.some((entry) => {
+			const text = entry.trim();
+			return text === name || text === line;
+		});
+	return covered ? undefined : line;
 }
 
 function ticketId(ticket: string): string {

@@ -125,8 +125,10 @@ their own process group), and a later session rehydrates and settles inherited
 jobs from disk evidence. A job inherited past its wall-clock ceiling settles
 as `timeout` without being killed: the recorded pid may name a recycled
 process after that long, so pi never kills blind — stop a stuck executor by
-hand using the pid in `meta.json`. Add `.fleet/` to
-`.gitignore`.
+hand using the pid in `meta.json`. A dispatch appends the state dir basename
+(`.fleet/` by default) to the worktree's `.gitignore` when that file does not already
+cover it, so fleet artifacts never show up as untracked executor work; a state
+dir outside the worktree is left out of it.
 
 ## Configuration
 
@@ -185,6 +187,7 @@ extensions/
     types.ts          shared types
     profiles.ts       executor argv + prompt building (pure)
     plan.ts           dispatch validation and planning (pure)
+    preflight.ts      pre-dispatch worktree fix: .gitignore covers the state dir
     contract.ts       result contract validation (pure)
     frontier.ts       ticket-graph frontier computation (pure)
     judgments.ts      Jev gate and triage: question catalog, interpretation, thresholds (pure)
