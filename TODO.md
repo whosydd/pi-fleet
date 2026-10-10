@@ -104,13 +104,15 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 ## P3 — 加固与小项
 
-- [ ] **#24 收割上报执行器的真实死因**（本仓库）
+- [x] **#24 收割上报执行器的真实死因**（本仓库）—— 已落地 `ebd0b7b`
   范围：claude 非零退出时，`supervise.ts` 目前只报 `executor exited with code
   1; see stderr.log`，而 stderr.log 是空的，真因在 stdout.log 的 JSON envelope
   里（`is_error`、`api_error_status`、`terminal_reason`、`result`）。额度 403
   实测：exit=1 + `api_error_status:403` + `result:"Failed to authenticate..."`。
   验收标准：执行器因鉴权或额度失败时，harvest 文本直接给出该原因，不让人去翻空文件。
   依赖：无。#15 现场发现。
+  顺带修掉的：`persist` 在 run dir 已消失时抛 ENOENT，异常跑出 exit handler 会把会话
+  带死（`88973b2`）。这条竞争是 #24 的新测试推出来的。
 
 - [ ] **#25 worktree 依赖准备**（文档或代码，落点待定）
   范围：worktree 不带 `node_modules`，执行器跑不了 `npm run check`。当前手工
@@ -149,6 +151,5 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 ## 下次开工入口
 
 #15 的四条腿已过三条（worktree + gate + 跨会话收割），执行器腿等 tierflow 额度
-恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。额度未恢复时做 #24
-和 #25：两项都无依赖，且都是 #15 现场抱出来的真问题。#16 和 #17 继续等 #15
-收尾。
+恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。#24 已落地。额度未恢复
+时做 #25、#22、#23：三项都无依赖。#16 和 #17 继续等 #15 收尾。
