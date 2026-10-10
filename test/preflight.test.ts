@@ -5,7 +5,17 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -75,6 +85,41 @@ test("a PI_FLEET_STATE_DIR outside the worktree changes nothing", () => {
 		// A nested state dir is still inside: its basename is the entry.
 		mkdirSync(join(dir, "var"), { recursive: true });
 		assert.equal(ensureStateDirIgnored(dir, "var/fleet-state").appended, "fleet-state/");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a read-only .gitignore degrades to an error and never throws", () => {
+	const dir = worktree();
+	const path = join(dir, ".gitignore");
+	try {
+		writeFileSync(path, "node_modules/\n", "utf8");
+		chmodSync(path, 0o444);
+
+		const fix = ensureStateDirIgnored(dir, ".fleet");
+		assert.equal(fix.appended, undefined);
+		assert.equal(typeof fix.error, "string");
+		assert.ok((fix.error ?? "").length > 0, "the error explains the failed write");
+		// The dispatch path only shows this as a note: the file is untouched.
+		assert.equal(readFileSync(path, "utf8"), "node_modules/\n");
+	} finally {
+		chmodSync(path, 0o644);
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a .gitignore that is a directory degrades to an error and never throws", () => {
+	const dir = worktree();
+	try {
+		mkdirSync(join(dir, ".gitignore"));
+
+		const fix = ensureStateDirIgnored(dir, ".fleet");
+		assert.equal(fix.appended, undefined);
+		assert.equal(typeof fix.error, "string");
+		assert.ok((fix.error ?? "").length > 0, "the error explains the failed read");
+		// Nothing was created inside or around the impostor directory.
+		assert.ok(lstatSync(join(dir, ".gitignore")).isDirectory());
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

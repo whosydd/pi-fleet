@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { blockerFindings, nextStep } from "../extensions/lib/loop.ts";
+import { blockerFindings, fixBriefFor, nextStep, reviewBriefFor } from "../extensions/lib/loop.ts";
 import type { JobMeta } from "../extensions/lib/types.ts";
 
 function meta(overrides: Partial<JobMeta> = {}): JobMeta {
@@ -82,4 +82,40 @@ test("a blocked implementation is not reviewed: nothing landed, so there is noth
 	assert.equal(nextStep(meta(), undefined, 2, true).kind, "halt");
 	// And a landed one still earns its review.
 	assert.deepEqual(nextStep(meta(), { status: "implemented", commits: [{ sha: "a" }] }, 2, true), { kind: "review" });
+});
+
+// The brief builders the loop writes for itself: they carry every fact the
+// reviewer and the fixer get, so their wording is the contract's other half.
+test("reviewBriefFor picks its fixed point as meta.base, contract.branch, then HEAD~1", () => {
+	assert.match(reviewBriefFor(meta({ base: "origin/main" }), {}), /git diff origin\/main\.\.HEAD/);
+	assert.match(reviewBriefFor(meta(), { branch: "fleet/42-work" }), /git diff fleet\/42-work\.\.HEAD/);
+	assert.match(reviewBriefFor(meta(), {}), /git diff HEAD~1\.\.HEAD/);
+	// Both present: the dispatch's own base wins over the one the contract reported,
+	// which is the only case the three assertions above leave unpinned.
+	assert.match(reviewBriefFor(meta({ base: "origin/main" }), { branch: "fleet/42-work" }), /git diff origin\/main\.\.HEAD/);
+});
+
+test("reviewBriefFor reports the commit count and names both review axes", () => {
+	const brief = reviewBriefFor(meta(), { commits: [{ sha: "a" }, { sha: "b" }, { sha: "c" }] });
+	assert.match(brief, /3 commit\(s\) reported by the implementation job/);
+	assert.match(brief, /Axis 1 - standards/);
+	assert.match(brief, /Axis 2 - spec/);
+});
+
+test("reviewBriefFor carries the implementer's summary, or says the claim is unstated", () => {
+	assert.match(reviewBriefFor(meta(), { summary: "adds the loop tests" }), /What the implementer claims it does: adds the loop tests/);
+	assert.match(reviewBriefFor(meta(), {}), /What the implementer claims is unstated/);
+});
+
+test("fixBriefFor names the next round and ticket, lists every finding, and bans history rewrites", () => {
+	const brief = fixBriefFor(meta({ ticket: "42", fixRound: 1 }), [
+		"#0 (standards): finding 0",
+		"#1 (spec): finding 1",
+	]);
+	assert.match(brief, /Fix round 2 for ticket 42/);
+	assert.match(brief, /- #0 \(standards\): finding 0/);
+	assert.match(brief, /- #1 \(spec\): finding 1/);
+	assert.match(brief, /git stash/);
+	assert.match(brief, /--amend/);
+	assert.match(brief, /force push/);
 });
