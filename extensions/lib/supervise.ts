@@ -47,6 +47,9 @@ const START_GRACE_MS = 20_000;
 /** Headroom for a prompt submit, which only writes into an existing pane. */
 const PROMPT_GRACE_MS = 10_000;
 
+/** How many times a job re-arms its agent wait: a pause is not the end of a run. */
+const WATCH_ARMS = 6;
+
 export type HarvestOutcome =
 	| { kind: "running" }
 	| { kind: "complete"; meta: JobMeta }
@@ -288,12 +291,33 @@ export class Supervisor {
 	 * advisory: if pi is gone it dies with the session, and the harvest still
 	 * settles the job from the contract file.
 	 */
-	#watchAgent(meta: JobMeta, onSettled?: (meta: JobMeta) => void): void {
-		if (!meta.agentName) return;
+	/**
+	 * Wait for the agent to stop working — and keep waiting when a wait ended
+	 * without settling the job.
+	 *
+	 * An interactive agent reaches a settled herdr state long before the task is
+	 * done: `blocked` means it waits for a human, and `agent wait` returns for that
+	 * too. A single wait per job would fire the ping at the first pause and never
+	 * learn that the work landed afterwards, so the wait is re-armed while the job
+	 * is still running. The cap keeps a vanished agent from spinning.
+	 */
+	#watchAgent(meta: JobMeta, onSettled?: (meta: JobMeta) => void, armsLeft = WATCH_ARMS): void {
+		if (!meta.agentName || !onSettled || armsLeft <= 0) return;
 		try {
 			const waiter = spawn(this.settings.herdrBin, agentWaitArgv(meta.agentName, meta.timeoutMs), { detached: true, stdio: "ignore" });
 			waiter.unref();
-			waiter.once("exit", () => onSettled?.(meta));
+			waiter.once("exit", () => {
+				// Judge the job before deciding anything: the agent stopping is not the
+				// job settling, and the contract file is. Refresh first so the ping and the
+				// re-arm both read a current state instead of a stale "running".
+				void this.refresh(meta.id)
+					.catch(() => undefined)
+					.then(() => {
+						const live = this.#jobs.get(meta.id) ?? meta;
+						onSettled(live);
+						if (live.state === "running") this.#watchAgent(live, onSettled, armsLeft - 1);
+					});
+				});
 			waiter.once("error", () => undefined);
 		} catch {
 			// No watcher, no ping. Never a failed dispatch.

@@ -375,3 +375,44 @@ test("a contract file with prose around the JSON still fails the contract", { ti
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("an agent that pauses for a human keeps being watched, so the ping is not lost", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-rearm-"));
+	const log = join(dir, "herdr.log");
+	// blocked = the agent waits on a person: a settled herdr state, an unfinished job.
+	const restore = useEnv({ FAKE_HERDR_LOG: log, FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_AGENT_STATE: "blocked" });
+	try {
+		const settings = settingsFor(dir, { paneMode: "on" });
+		const supervisor = new Supervisor(settings);
+		const plan = planFor(dir, settings, { ticket: "55" });
+		let pings = 0;
+		const meta = await supervisor.dispatch(plan, plan.prompt, undefined, () => {
+			pings += 1;
+		});
+
+		// One wait per pause is not enough: the first wait returns while the job is
+		// still running, and the work lands later.
+		const deadline = Date.now() + 15_000;
+		while (pings < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.ok(pings >= 2, `the wait was re-armed after a pause (pings: ${pings})`);
+		const waits = herdrCalls(log).filter((call) => call.args[1] === "wait");
+		assert.ok(waits.length >= 2, `herdr saw the re-arm (${waits.length} waits)`);
+		assert.ok(waits.length <= 6, "the re-arm is capped, so a vanished agent cannot spin");
+
+		// The job is still running and says why: it waits on a human.
+		const paused = await supervisor.refresh(meta.id);
+		assert.equal(paused.outcome.kind, "running");
+		assert.equal(supervisor.get(meta.id)?.agentStatus, "blocked");
+
+		// The human answers and the contract lands: that settles it, and the
+		// re-arming stops because the job is no longer running.
+		writeFileSync(plan.paths.resultPath, JSON.stringify({ ticket: "55", status: "implemented", branch: "b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } }));
+		assert.equal((await supervisor.refresh(meta.id)).outcome.kind, "complete");
+		const before = herdrCalls(log).filter((call) => call.args[1] === "wait").length;
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		assert.equal(herdrCalls(log).filter((call) => call.args[1] === "wait").length, before, "a settled job stops re-arming");
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
