@@ -283,11 +283,12 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 #15 四条腿全过（worktree、gate 正反、跨会话收割、codex 交互 + claude 契约）。
 #28 布局与 #29 循环已落地并用 stand-in 验过。剩下的按顺序：
 
-1. **合并票分支**：`fleet/p23-gitignore`（codex 实现，1 commit 6 文件 +205/−6，
-   基线 `c7a843d`，工作树 `npm run check` 52 全绿）。main 已走到 77 测试，
-   `plan.ts`/`index.ts`/`README.md` 两边都动过 → 真冲突，合并后必须在合并树重跑
-   `npm run check`。顺手改掉 `extensions/lib/preflight.ts` 注释里「run dir 是相对
-   路径」那句（`48d7fe3` 后已不成立）。合完 #23 的 `.gitignore` 项才算关闭。
+1. ~~合并票分支~~ 已做（`a4a37a7`）：三文件冲突全是「两边都保留」——
+   `gitignoreLine` 与 `parsePaneMode` 并列，派发结果同时带 pane note、gitignore
+   note 与 pane 字段。合并树 87 测试全绿（main 77 + 分支 10）。
+   `preflight.ts` 那句过时注释已改写成仍然成立的理由。#23 的 `.gitignore` 项已关闭。
+   另一处发现：仓库根其实是 `packages/pi-fleet` 本身，所以 p23 那个 worktree 落在
+   **仓库外面**，不是「在项目文件夹里」——新票改用 `herdr worktree create` 顺带解决。
 2. **真执行器跑一轮链**：现成输入是这次真评审的两条 findings（preflight 的 catch
    分支无测试；#23 三项只交付了 `.gitignore` 一项）。看链能否自动起 fix 轮。
 3. **#30 / #31**：都是这轮现场抓出来的小口，纯函数改动，无需额度。
