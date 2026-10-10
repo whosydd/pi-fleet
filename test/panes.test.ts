@@ -30,9 +30,10 @@ function settingsFor(dir: string, overrides: Partial<FleetSettings> = {}): Fleet
 		codexBin: "/bin/sh",
 		claudeBin: "claude",
 		gitGuard: true,
-		// Tests never inherit the ambient HERDR_ENV: a pane test opts in by name.
+		// Tests never touch the real Herdr session: the herdr binary defaults to the
+		// stand-in, and pane mode stays off unless a test asks for it by name.
 		paneMode: "off",
-		herdrBin: "herdr",
+		herdrBin: FAKE_HERDR,
 		...overrides,
 	};
 }
@@ -241,7 +242,7 @@ test("closeTab declines a running pane job", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-running-"));
 	try {
 		const supervisor = new Supervisor(settingsFor(dir));
-		const plan = planFor(dir, settingsFor(dir, { paneMode: "on" }));
+		const plan = planFor(dir, settingsFor(dir));
 		const meta = await supervisor.dispatch(plan, plan.prompt);
 		// Mark it as a live pane job by hand: dispatch would need a real pane.
 		meta.runner = "pane";
