@@ -65,6 +65,7 @@ import { closableTabs, isAgentWaiting } from "./lib/panes.ts";
 import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
 import { fixBriefFor, nextStep, reviewBriefFor } from "./lib/loop.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
+import { ensureStateDirIgnored } from "./lib/preflight.ts";
 import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
 import { isExecutorKind, isTaskKind, type ExecutorKind, type JobMeta } from "./lib/types.ts";
 const DISPATCH_TOOL_DESCRIPTION = `Dispatch a one-shot executor (codex exec or claude -p) to implement or review one ticket in its own git worktree. Detached: returns a job id immediately; harvest with FleetHarvest on a later turn.
@@ -246,11 +247,23 @@ export default function fleetExtension(pi: ExtensionAPI) {
 					: "";
 			const channelNote = gate.note ? `\nNote: ${gate.note}.` : "";
 
+			// The worktree must ignore its own fleet state dir before an executor
+			// starts, so run dirs never read as untracked work. Only now: a
+			// dispatch the gate refused must not have touched the checkout. A
+			// preflight fix is housekeeping, so an unwritable .gitignore degrades
+			// to a note instead of blocking the job.
+			const gitignoreFix = ensureStateDirIgnored(args.worktree, settings.stateDir);
+			const gitignoreNote = gitignoreFix.appended
+				? `\nGitignore: appended "${gitignoreFix.appended}" to ${join(args.worktree, ".gitignore")} — that uncommitted line is fleet housekeeping, not the ticket's work; expect it in the harvest diff.`
+				: gitignoreFix.error
+					? `\nNote: could not update the worktree .gitignore (${gitignoreFix.error}); fleet artifacts may show there as untracked files.`
+					: "";
+
 			let meta: JobMeta;
-			// A finished executor must not go quiet. Pane jobs ping from inside their
-			// own script, so the ping survives this session; a detached spawn has no
-			// script, so pi pings it here when the child exits. Only one of the two
-			// channels ever fires for a given job.
+			// A finished executor must not go quiet. An interactive job pings from the
+			// background `herdr agent wait` this session holds, so the ping arrives when
+			// the agent stops working; a detached spawn pings from its own exit event.
+			// Exactly one channel fires per job.
 			const onSettled = (settled: JobMeta): void => {
 				if (settings.loop) void advanceChain(ctx, settled.id);
 				if (!settings.notify) return;
@@ -278,7 +291,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 					? `\nInteractive dispatch unavailable, running detached instead: ${meta.paneFallback}`
 					: "";
 			return textResult(
-				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}${paneNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${skill}`,
+				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}${paneNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${gitignoreNote}${skill}`,
 				{ status: "dispatched", jobId: meta.id, ticket: meta.ticket, runDir: `${settings.stateDir}/runs/${meta.id}`, gate: gateRecord, pane: meta.pane, paneFallback: meta.paneFallback },
 			);
 		},
