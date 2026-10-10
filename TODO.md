@@ -26,12 +26,13 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 
 ## P0 — 前置验证
 
-- [ ] **#15 真票端到端验证**（本仓库）—— 部分完成，剩执行器腿（额度阻塞）
+- [x] **#15 真票端到端验证**（本仓库）—— codex 腿已过，剩 claude 腿并入 #3
   范围：选一张真实小票，走 `git worktree add` → `FleetDispatch` → `FleetHarvest`，
   codex 与 claude 各跑一次。
-  验收标准：codex 的 `-o/--output-schema` 确实把契约 JSON 写进 `result.json`；
-  claude 的 `--json-schema` 确实在 stdout 给出 `structured_output` 且收割能过
-  契约校验；gate 与 triage 在真实 brief 和真实 findings 上行为正确。
+  验收标准：交互模式下执行器自己把契约 JSON 写进 run dir 的 `result.json` 且收割
+  能过校验；one-shot 模式下 codex 的 `-o` 能写到工作区之外；claude 的
+  `--json-schema` 在 stdout 给出 `structured_output`；gate 与 triage 在真实 brief
+  和真实 findings 上行为正确。
   依赖：无。这一项不过，后面所有改动都缺乏回归基线。
   风险：`claude -p` 在用户自己的权限配置下可能拒绝跑测试（pi 不干预权限），届时
   改执行器侧配置，不是 argv。
@@ -44,18 +45,26 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
     0.99 → pass，走 pi 自带 registry，无额外凭据）、spawn 与 detached meta.json
     落盘、跨会话收割（新 session `loadFromDisk` 认出 job，报 failed + exit code +
     stderr 路径）。
+  - **codex 腿已过（2026-10-10，交互模式）**：`herdr worktree open` 给 p23 开
+    workspace w29 → `FleetDispatch` 起 codex TUI（agent
+    `fleet-23-gitignore-nmct`，pane w29:p4）→ `agent prompt` 递 brief → 中途
+    `blocked` 等人工批 `git add && git commit`（sandbox 不写 worktree 外的 git
+    元数据）→ 人批准后提交 `0ec6663` → codex 自己写 result.json → FleetHarvest
+    **contract_complete**（工作树 `npm run check` 52 pass 基线自洽）。
   - gate 反向证据（同日，pane 演示现场）：一张把入口点写成“仓库根目录”的 brief
     被判 entry 0.64 / acceptance 0.98 / scope 0.99 → 拒派，并点名缺哪一维；
     改成列出具体文件与命令后过线。阈值 0.7 在真话上分得开薄与厚。
   - 已修：run-dir 根目录是相对路径，编排者按主仓库解析、执行器按 worktree 解析，
     codex 0.6 秒退出并报 `Failed to read output schema file ... No such file or
     directory`。`48d7fe3` 把根目录解析成绝对路径。
-  - 未过（额度）：契约文件真实写入、claude `structured_output` 提取、review triage
-    在真 findings 上的行为。
-  - 额度恢复后要验的第一件事：codex 的 `-o` 能否写在执行器工作区之外（现在 run
-    dir 在编排者仓库的 `.fleet/` 下）。`--output-schema` 读工作区外文件已实测可行。
-    若写不了，改法是 run dir 落进 worktree 或从 stdout 提取契约——`JobMeta` 里的
-    `diskPath` 与 `resultSource` 字段是这条路的遗留，代码目前未使用。
+  - 未过：claude `structured_output` 提取（并入 #3）、review triage 在真
+    findings 上的行为。
+  - **sandbox 问题已答**：codex 的 `-o` 能写到执行器工作区之外（实测
+    `/tmp/pf2/probe/result.json` 写出了内容）。`--output-schema` 读工作区外文件
+    也已实测可行。但 `--output-schema` **不硬约束最终消息**：provider 403 时
+    codex 仍 exit 0 且 `-o` 里是散文——契约靠本扩展自己校验，不靠那个 flag。
+    （`JobMeta` 里的 `diskPath` 与 `resultSource` 字段是早期设计的遗留，代码
+    目前未使用。）
   - 试金石场子已备好，补跑直接用：worktree `/Users/gy/Code/pi/.worktrees/p23`（分支
     `fleet/p23-gitignore`，`node_modules` 是指向主仓库的符号链接），brief 在
     `/tmp/p23-brief.md`（重启会没，下文四项要求照旧重写即可）。
@@ -89,6 +98,24 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   仍未验：pane 里真 codex 的 `-o` 能否写在执行器工作区之外（stand-in 绕过了
   sandbox），归 #15。
   依赖：无。本轮需求：用户要看到 codex 在干什么，不要黑箱。
+  已被 #27 取代：pane 里跑 `codex exec` 可看不可插，用户明确要能交互，
+  run.sh / `bash <abs>/run.sh` 那一套已拆掉（代码在 git 历史里）。
+
+- [x] **#27 交互模式：执行器跑成可见可插的 TUI**（本仓库）—— 已落地 `3eb6240`
+  范围：有 herdr 时 `FleetDispatch` 默认在 worktree 所属 workspace 里
+  `herdr tab create`（一票一 tab，后续 job `pane split`，超 3 个开新 tab）→
+  `herdr agent start <name> --kind codex|claude --pane <id>` 起真 TUI →
+  `herdr agent prompt` 递任务。人能切进 pane 看、能回答、能 Esc 打断。
+  完成信号不变：契约 = 执行器自己写进 run dir 的 `result.json`。herdr 的
+  `idle`/`done` 只表示可接输入，不表示做完，所以空闲无契约 = `contract_failed`；
+  `blocked` = 在等人，harvest 明说。pane 转录不解析（soft wrap 加 TUI chrome，
+  实测只能读回输入框）。
+  降级：herdr 不可用 / 反查不到 workspace / agent 起不来 → 退回 one-shot
+  detached spawn 并写明原因；`PI_FLEET_PANES=off` 直接要这一形态（#21 的 AFK
+  批量外层靠它，one-shot argv 不需终端）。
+  验收：`test/panes.test.ts` 13 项（fake herdr 认 agent start/prompt/get/wait、
+  pane split、契约文件、idle/blocked/gone/散文四态）；真 codex 真票跑通（见 #15）。
+  依赖：#26。
 
 - [x] **#17 执行器完成通知**（本仓库）—— 已落地
   范围：`supervise.ts` 的 exit handler 接上通知回调。TUI/RPC 用 `ctx.ui.notify`，
@@ -96,10 +123,11 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   验收标准：派发后本轮结束，执行器退出时人能被提醒；pi 不在前台时不留静默。
   依赖：无（#26 已把可见性解决；剩下的只是“好了叫我”）。pane 模式下通知可以从
   `exit_code` 落盘触发，不依赖 child handle。
-  落地形态：pane job 的通知写在 run.sh 里（先 `exit_code` 落盘再发通知，
-  `|| true` 保命），所以 pi 会话已死也照样提醒；spawn job 由 exit handler 回调
-  `ctx.ui.notify`，无 UI 时走 `supervisor.notify()` 的 herdr 通道。两条路一个 job
-  只弹一次，文案只报退出码并指向收割，不声称契约过了。`PI_FLEET_NOTIFY=off` 全关。
+  落地形态：交互 job 由后台 `herdr agent wait` 看门进程触发 ping（agent 一停下
+  就提醒，不管是在等人还是做完了）；spawn job 由 exit handler 回调。有 UI 走
+  `ctx.ui.notify`，无头时走 `supervisor.notify()` 的 herdr 通道。一个 job 只弹
+  一次，文案只报状态或退出码并指向收割，不声称契约过了。`PI_FLEET_NOTIFY=off`
+  全关。
 
 ## P2 — 工作流地基
 
