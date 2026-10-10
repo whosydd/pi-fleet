@@ -136,12 +136,17 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   分支不可达——过去任何一次 claude spawn 都不可能通过契约校验。`20bc2ac` 修，
   `test/supervise.test.ts` 补回归（#15 的 claude 腿此前从未真验，正是缺这条测试）。
 
-- [ ] **#16 frontier 暴露给模型**（本仓库）
+- [x] **#16 frontier 暴露给模型**（本仓库）—— 已落地
   范围：`FleetStatus` 增加可选 `tickets` 参数，返回 `ready` / `waiting` / `errors`。
   `lib/frontier.ts` 目前是纯函数，模型调不到它。
   验收标准：传入带 blocking 边的票图，拿到与 to-tickets 声明一致的 ready 集；
   环与未知依赖以字符串报告，不抛异常。
   依赖：#15。
+  落地：`FleetStatus { tickets? }` 收整个票图，回 ready / waiting / errors；
+  报告文本与 summary 都在 `frontier.ts` 的纯函数 `reportFrontier` 里生成，
+  所以 ready 集与「未知 blocker 让该票两头都不出现」这件事实有测试而没有会话
+  （`test/frontier.test.ts` 补三例：正常图、空 frontier 写 `(none)`、环以字符串回）。
+  index.ts 只做一次调用。
 
 - [x] **#26 执行器跑在可见的 Herdr pane 里**（本仓库）—— 已落地
   范围：`PI_FLEET_PANES=auto`（`HERDR_ENV=1` 即开）下，`FleetDispatch` 在
@@ -294,7 +299,7 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
    blocker/style/ignore 算成互斥分区、uncertain 单独报数。
 3. **真执行器跑一轮链**：现成输入是这次真评审的两条 findings（preflight 的 catch
    分支无测试；#23 三项只交付了 `.gitignore` 一项）。看链能否自动起 fix 轮。
-4. #16 frontier 暴露给模型（等 #15 收尾——现已可动）。#25 worktree 依赖准备。
+4. #25 worktree 依赖准备。
    #23 剩 gate 的 classify usage 记账。
 
 现场遗留：workspace `w29` = worktree `/Users/gy/Code/pi/.worktrees/p23`，

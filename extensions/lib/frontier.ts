@@ -82,3 +82,23 @@ export function computeFrontier(tickets: Ticket[]): FrontierResult {
 	}
 	return { ready, waiting, errors };
 }
+
+/** The frontier as the tool reports it: one line of prose, one typed summary. */
+export interface FrontierReport {
+	text: string;
+	summary: { ready: string[]; waiting: string[]; errors: string[] };
+}
+
+/**
+ * Turn a frontier into the answer FleetStatus gives the model.
+ *
+ * Pure so the ready set and the structural problems are testable without a
+ * session: an id the graph does not know drops its ticket out of both sets and
+ * must still be reported, or the model reads a quiet frontier as an empty one.
+ */
+export function reportFrontier(tickets: Ticket[]): FrontierReport {
+	const { ready, waiting, errors } = computeFrontier(tickets);
+	const ids = (list: Ticket[]) => (list.length === 0 ? "(none)" : list.map((ticket) => ticket.id).join(", "));
+	const text = `Frontier — ready: ${ids(ready)}; waiting: ${ids(waiting)}.${errors.length > 0 ? `\nGraph problems: ${errors.join("; ")}` : ""}`;
+	return { text, summary: { ready: ready.map((ticket) => ticket.id), waiting: waiting.map((ticket) => ticket.id), errors } };
+}

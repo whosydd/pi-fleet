@@ -159,6 +159,19 @@ points at the harvest. It never claims the contract passed — only `FleetHarves
 decides that. A ping that cannot be delivered is dropped in silence; the
 notification channel never blocks or fails a job.
 
+### What may start next
+
+`FleetStatus` takes the tracker's ticket graph and returns the frontier:
+
+```json
+{ "tickets": [{ "id": "42", "status": "open", "blockers": ["41"] }] }
+```
+
+Ready means every blocker is `done`; waiting means at least one is not. Unknown
+blocker ids and cycles come back as `Graph problems:` strings instead of dropping
+a ticket out of both sets in silence. The extension never owns ticket state — it
+reads the graph you hand it. Closing a ticket stays your tracker's job.
+
 ## Result contract
 
 The executor's final output must be JSON matching the schema the extension

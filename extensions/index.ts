@@ -65,6 +65,7 @@ import {
 import { findGitHazard } from "./lib/gitguard.ts";
 import { closableTabs, isAgentWaiting } from "./lib/panes.ts";
 import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
+import { reportFrontier, type Ticket } from "./lib/frontier.ts";
 import { fixBriefFor, nextStep, reviewBriefFor } from "./lib/loop.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
 import { ensureStateDirIgnored } from "./lib/preflight.ts";
@@ -90,7 +91,9 @@ A job you dispatched is not finished until a harvest says contract_complete. Do 
 
 Review jobs get a Jev triage on harvest: each finding is classified blocker/style/ignore. Only blockers should consume a fix round; uncertain verdicts are flagged for you to read yourself. Triage unavailable degrades to a note, never a block.`;
 
-const STATUS_TOOL_DESCRIPTION = `List fleet jobs: id, ticket, executor, task kind, state, fix round. Use it to rehydrate after a reload or to pick what to harvest next. Inherited jobs from a dead session show here after loadFromDisk.`;
+const STATUS_TOOL_DESCRIPTION = `List fleet jobs: id, ticket, executor, task kind, state, fix round. Use it to rehydrate after a reload or to pick what to harvest next. Inherited jobs from a dead session show here after loadFromDisk.
+
+Pass the tracker's tickets (id, status, blockers) and the answer also carries the frontier: which tickets are ready to dispatch, which wait on a blocker, and the graph's structural problems (unknown blocker ids, cycles) as strings. The extension never owns ticket state — it reads the graph you hand it and computes what may start.`;
 
 function textResult<T>(text: string, details: T): { content: { type: "text"; text: string }[]; details: T } {
 	return { content: [{ type: "text", text }], details };
@@ -521,24 +524,45 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		await pingLoop(ctx, settled, `halted: ${step.reason}`);
 	}
 	const statusTool = defineTool({
-		name: "FleetStatus",		label: "Fleet Status",
+		name: "FleetStatus",
+		label: "Fleet Status",
 		description: STATUS_TOOL_DESCRIPTION,
-		promptSnippet: "List dispatched fleet jobs and their states",
-		promptGuidelines: ["Call FleetStatus with no arguments when you need to see what is in flight or what to harvest next."],
-		parameters: Type.Object({}),
-		execute: async () => {
+		promptSnippet: "List dispatched fleet jobs, and the ticket frontier when you hand it over",
+		promptGuidelines: [
+			"Call FleetStatus with no arguments when you need to see what is in flight or what to harvest next.",
+			"Call FleetStatus with the tracker's tickets when you need to know what may start next: it returns the ready frontier, the waiting set, and structural problems in the graph.",
+		],
+		parameters: Type.Object({
+			tickets: Type.Optional(
+				Type.Array(
+					Type.Object({
+						id: Type.String({ description: "Ticket id, the same string FleetDispatch takes." }),
+						status: Type.String({ description: "open | in_progress | done | failed | blocked, as the tracker reports it." }),
+						blockers: Type.Optional(Type.Array(Type.String({ description: "Ids of tickets that must be done first." }))),
+					}),
+					{ description: "The whole ticket set, read from the tracker by you. The extension does not own ticket state." },
+				),
+			),
+		}),
+		execute: async (_toolCallId, params) => {
 			const jobs = supervisor.all();
+			// The frontier is computed here and nowhere else: the graph is the model's,
+			// read from its tracker, and this only answers what may start.
+			const tickets = (params as { tickets?: Ticket[] }).tickets;
+			const report = tickets && tickets.length > 0 ? reportFrontier(tickets) : undefined;
 			const summary = {
 				jobs: jobs.map((job) => ({ id: job.id, ticket: job.ticket, state: job.state, executor: job.executor, taskKind: job.taskKind, fixRound: job.fixRound, pane: job.pane, paneClosedAt: job.paneClosedAt })),
 				openTabs: supervisor.listOpenTabs(),
+				frontier: report?.summary,
 			};
+			const frontierText = report ? `\n${report.text}` : "";
 			if (jobs.length === 0) {
-				return textResult("No fleet jobs in this session. Jobs from earlier sessions appear after loadFromDisk (a reload rehydrates them).", summary);
+				return textResult(`No fleet jobs in this session. Jobs from earlier sessions appear after loadFromDisk (a reload rehydrates them).${frontierText}`, summary);
 			}
 			const running = supervisor.runningCount();
 			const lines = jobs.map(jobLine);
 			return textResult(
-				`${jobs.length} job(s), ${running} running${summary.openTabs.length > 0 ? `, ${summary.openTabs.length} fleet pane tab(s) still open` : ""}:\n${lines.join("\n")}`,
+				`${jobs.length} job(s), ${running} running${summary.openTabs.length > 0 ? `, ${summary.openTabs.length} fleet pane tab(s) still open` : ""}:\n${lines.join("\n")}${frontierText}`,
 				summary,
 			);
 		},
