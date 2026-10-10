@@ -121,11 +121,14 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   验收标准：派发到 Node 项目的 worktree 里，依赖就绪且 `git status` 干净。
   依赖：无。#15 现场发现。
 
-- [ ] **#22 pi 侧危险 git 拦截**（本仓库）
+- [x] **#22 pi 侧危险 git 拦截**（本仓库）—— 已落地
   范围：`user_bash` handler 拦 `git stash`、`git commit --amend`、force push。
   依据：上游文档记录的事故现场——`refs/stash` 跨 worktree 共享，worktree 隔离不住它。
   验收标准：拦截时给出原因与替代命令，不是静默失败。
   依赖：无。
+  落地形态：纯模块 `extensions/lib/gitguard.ts`（分词 + 逐段判 git 子命令，引号里的
+  词不误伤），接线同时盖 `tool_call`（模型的 bash 工具）与 `user_bash`（用户的 `!`），
+  `PI_FLEET_GIT_GUARD=off` 可关。真会话实测：`git stash list` 被拦，回原因与替代命令。
 
 - [ ] **#23 小项打包**（本仓库）
   gate 的 classify usage 附进 dispatch 结果；`test/plan.test.ts` 补 claude implement
@@ -151,5 +154,6 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
 ## 下次开工入口
 
 #15 的四条腿已过三条（worktree + gate + 跨会话收割），执行器腿等 tierflow 额度
-恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。#24 已落地。额度未恢复
-时做 #25、#22、#23：三项都无依赖。#16 和 #17 继续等 #15 收尾。
+恢复后补跑，先验 codex 的 `-o` 能否写在执行器工作区之外。#24、#22 已落地。额度未
+恢复时做 #25 或 #23（#23 的 `.gitignore` 项先留着，它是 #15 的试金石票）。#16 和
+#17 继续等 #15 收尾。
