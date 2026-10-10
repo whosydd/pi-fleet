@@ -1,0 +1,46 @@
+# Development Rules
+
+## Commands
+
+- `npm run check` — typecheck + tests + headless load check. Run before committing.
+- `npm run smoke` — headless load check through pi's own loader, no model call.
+- `npm run typecheck` — `tsc --noEmit`.
+- `npm run test` — `node --test test/*.test.ts`.
+
+Tests must not hit the network: executor calls are faked with a stand-in that
+honours the same argv (`-o`), and classifier calls are covered by pure
+interpretation functions over canned answers.
+
+## Layout
+
+- `extensions/index.ts` — pi extension entry: tool registration, gate and
+  triage wiring. Keep it thin.
+- `extensions/lib/` — implementation modules (see README).
+- Pure modules own the decisions, the wiring owns the I/O: `plan.ts` (dispatch
+  validation and planning), `contract.ts` (contract validation), `frontier.ts`
+  (ticket-graph frontier), `judgments.ts` (question catalog and interpretation)
+  stay free of fs, spawning, and pi imports so they test without a session or
+  a model call. `supervise.ts` is the only module that spawns.
+
+## Invariants
+
+- **Executor autonomy.** The argv carries output shaping only (`-o`,
+  `--output-schema`, `--output-format`, `--json-schema`) plus the model
+  override. Never add permission, tool-selection, or network flags: what tools
+  an executor uses is the executor's own policy. Executor spend is never
+  captured or attributed — executors bill their own accounts.
+- **The contract is the only success signal.** A zero exit with a broken
+  contract is `contract_failed`, never `complete`. The executor's final output
+  must parse as the schema; prose around it fails.
+- **Judgments are advisory and degradable.** A failed or missing classifier
+  channel degrades to a note; it must never block a dispatch or a harvest.
+  Thresholds live in code (settings), never in the model's discretion.
+- **The disk is the source of truth.** Jobs survive the session; harvests of
+  inherited jobs settle from disk evidence. Never kill by recorded pid without
+  the in-memory child handle: after a session is gone, the pid may name a
+  recycled process.
+- **Fix rounds are capped in code.** Past the cap the dispatch refuses and the
+  model escalates. A fix-round dispatch skips the brief gate (it narrows an
+  already-gated brief).
+- **One harvest reports once.** Re-harvesting a settled job must not re-run
+  the triage or duplicate the ledger entry.
