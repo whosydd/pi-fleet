@@ -17,6 +17,7 @@ const settings = {
 	maxFixRound: 2,
 	codexBin: "codex",
 	claudeBin: "claude",
+	gitGuard: true,
 };
 
 test("rejects dispatches missing each required field, with a field-naming message", () => {
@@ -105,6 +106,8 @@ test("readSettings falls back to defaults and honours overrides", () => {
 	const overridden = readSettings({ PI_FLEET_MAX_CONCURRENCY: "9", PI_FLEET_STATE_DIR: "/tmp/fleet-state" }, "/proj");
 	assert.equal(overridden.maxConcurrent, 9);
 	assert.equal(overridden.stateDir, "/tmp/fleet-state");
+	assert.equal(readSettings({}, "/proj").gitGuard, true);
+	assert.equal(readSettings({ PI_FLEET_GIT_GUARD: "off" }, "/proj").gitGuard, false);
 	const relative = readSettings({ PI_FLEET_STATE_DIR: "../state" }, "/proj/.worktrees/wt");
 	assert.equal(relative.stateDir, "/proj/.worktrees/state");
 });

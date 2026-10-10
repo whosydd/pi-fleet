@@ -68,6 +68,7 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env, cwd: string =
 		maxFixRound,
 		codexBin: env.PI_FLEET_CODEX_BIN || "codex",
 		claudeBin: env.PI_FLEET_CLAUDE_BIN || "claude",
+		gitGuard: (env.PI_FLEET_GIT_GUARD || "on").toLowerCase() !== "off",
 	};
 }
 

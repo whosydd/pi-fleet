@@ -33,6 +33,8 @@
  *   PI_FLEET_JUDGMENTS         on (default) | off — Jev gate and triage
  *   PI_FLEET_JUDGE_PROVIDER    classifier provider (default: typesafe)
  *   PI_FLEET_JUDGE_ID          classifier id (default: jev-latest)
+ *   PI_FLEET_GIT_GUARD         on (default) | off — block git stash, commit
+ *                              --amend, and force push in bash calls
  *   PI_FLEET_GATE_FLOOR        noul hard floor, refuse below (default: 0.7)
  *   PI_FLEET_GATE_WARN         noul warn line (default: 0.85)
  *   PI_FLEET_TRIAGE_CONFIDENCE triage confidence floor (default: 0.8)
@@ -53,6 +55,7 @@ import {
 	type TriageFinding,
 	type TriageVerdict,
 } from "./lib/judgments.ts";
+import { findGitHazard } from "./lib/gitguard.ts";
 import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
 import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
 import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
@@ -104,6 +107,35 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		supervisor.clearTimers();
 		supervisor.persistAll();
 	});
+
+	/**
+	 * Fleet runs put one repository across several worktrees and point reviews
+	 * and fix rounds at commit shas. Three commands break that guarantee from the
+	 * orchestrator side: refs/stash is shared by every worktree, and an amend or
+	 * a force push invalidates the commit a base already names. Block them in the
+	 * model's bash calls and in the user's `!` commands, and say why.
+	 */
+	function guardReport(command: string): string | undefined {
+		const hazard = findGitHazard(command);
+		if (!hazard) return undefined;
+		return `pi-fleet git guard blocked this command:\n  ${hazard.segment}\n${hazard.reason}\nUse instead: ${hazard.alternative}`;
+	}
+
+	if (settings.gitGuard) {
+		pi.on("tool_call", async (event) => {
+			if (event.toolName !== "bash") return undefined;
+			const command = String((event.input as { command?: unknown }).command ?? "");
+			const reason = guardReport(command);
+			if (!reason) return undefined;
+			return { block: true, reason };
+		});
+
+		pi.on("user_bash", async (event) => {
+			const reason = guardReport(event.command);
+			if (!reason) return undefined;
+			return { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } };
+		});
+	}
 
 	/**
 	 * Run the Jev gate over a brief. Degrades to undefined on any channel

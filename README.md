@@ -115,6 +115,26 @@ failed judgment channel degrades to a note — it must never block a dispatch.
 | `PI_FLEET_GATE_WARN` | `0.85` | Noul warn line. |
 | `PI_FLEET_TRIAGE_CONFIDENCE` | `0.8` | Choice confidence floor for uncertain flags. |
 
+## Git guard
+
+A fleet run splits one repository across several worktrees, and reviews and fix
+rounds point at commit shas. Three commands break that guarantee from the
+orchestrator side:
+
+- `git stash` writes to `refs/stash`. One repository shares `refs/stash` with
+  every worktree, so a stash made in one ticket's worktree can pop in another.
+- `git commit --amend` rewrites a commit that a review base or a fix round
+  already names by sha.
+- `git push --force` replaces history that other clones already fetched.
+  `--force-with-lease` and a bundled `-f` count as force pushes too.
+
+The guard blocks those commands in the model's `bash` tool calls and in the
+user's `!` commands. It reports the blocked command, the reason, and one safer
+alternative; it never fails silently. `PI_FLEET_GIT_GUARD=off` disables it. The
+guard screens command text, so treat it as a guard, not a sandbox. Executors
+carry the same ban in their prompt, and their own permission policy stays
+theirs.
+
 ## Where state lives
 
 `PI_FLEET_STATE_DIR` (default `.fleet/`, resolved against the session's working
@@ -141,6 +161,7 @@ Environment, read once at load — reload pi to change it.
 | `PI_FLEET_MAX_FIX_ROUND` | `2` | Fix rounds before dispatch refusal forces escalation. |
 | `PI_FLEET_CODEX_BIN` | `codex` | codex binary. |
 | `PI_FLEET_CLAUDE_BIN` | `claude` | claude binary. |
+| `PI_FLEET_GIT_GUARD` | `on` | `off` stops blocking `git stash`, `git commit --amend`, and force push. |
 
 ## Intended shape in the workflow
 
@@ -159,9 +180,11 @@ workflow documents.
 ## Known limitations
 
 - v1 has no widget and no `/fleet` command group; the tools are the interface.
-- No `user_bash` interception of dangerous git commands on the pi side; the
-  ban travels in every dispatch prompt, and executor-side hooks (`.rules`,
-  pre-commit) remain worth installing.
+- The git guard screens command text (`git stash`, `git commit --amend`, force
+  push) in pi's bash calls. It is not a sandbox: it does not parse every shell
+  quoting trick, and it never reaches inside an executor. The executor-side ban
+  travels in the dispatch prompt, and executor-side hooks (`.rules`, pre-commit)
+  remain worth installing.
 - Worktree creation is the caller's job (`git worktree add`, or herdr's
   worktree workspaces for human-visible panes).
 - `codex exec` runs with its own default sandbox policy; set executor-side
@@ -187,6 +210,7 @@ extensions/
     profiles.ts       executor argv + prompt building (pure)
     plan.ts           dispatch validation and planning (pure)
     contract.ts       result contract validation (pure)
+    gitguard.ts       command screening for the three fleet-breaking git calls (pure)
     frontier.ts       ticket-graph frontier computation (pure)
     judgments.ts      Jev gate and triage: question catalog, interpretation, thresholds (pure)
     supervise.ts      process supervision, disk-backed job state

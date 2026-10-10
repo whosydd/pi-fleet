@@ -23,9 +23,10 @@ interpretation functions over canned answers.
 - `extensions/lib/` — implementation modules (see README).
 - Pure modules own the decisions, the wiring owns the I/O: `plan.ts` (dispatch
   validation and planning), `contract.ts` (contract validation), `frontier.ts`
-  (ticket-graph frontier), `judgments.ts` (question catalog and interpretation)
-  stay free of fs, spawning, and pi imports so they test without a session or
-  a model call. `supervise.ts` is the only module that spawns.
+  (ticket-graph frontier), `judgments.ts` (question catalog and interpretation),
+  `gitguard.ts` (command screening) stay free of fs, spawning, and pi imports so
+  they test without a session or a model call. `supervise.ts` is the only module
+  that spawns.
 
 ## Invariants
 
@@ -49,3 +50,8 @@ interpretation functions over canned answers.
   already-gated brief).
 - **One harvest reports once.** Re-harvesting a settled job must not re-run
   the triage or duplicate the ledger entry.
+- **The orchestrator never stashes, amends, or force-pushes.** `git stash`
+  crosses worktrees through the shared `refs/stash`, and an amend or a force
+  push invalidates a commit a review base or a fix round names. `gitguard.ts`
+  blocks them in `tool_call` and `user_bash`; `PI_FLEET_GIT_GUARD=off` is the
+  only escape and executors keep the ban in their prompt.

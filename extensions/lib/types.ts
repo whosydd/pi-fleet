@@ -81,6 +81,8 @@ export interface FleetSettings {
 	maxFixRound: number;
 	codexBin: string;
 	claudeBin: string;
+	/** Block git stash, git commit --amend, and force push in this session's bash calls (PI_FLEET_GIT_GUARD=off disables). */
+	gitGuard: boolean;
 }
 
 export const EXECUTOR_KINDS: readonly ExecutorKind[] = ["codex", "claude"];

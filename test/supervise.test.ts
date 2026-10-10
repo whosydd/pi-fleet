@@ -19,6 +19,7 @@ function settingsFor(dir: string): FleetSettings {
 		maxFixRound: 2,
 		codexBin: "/bin/sh",
 		claudeBin: "claude",
+		gitGuard: true,
 	};
 }
 
