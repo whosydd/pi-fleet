@@ -41,7 +41,9 @@ function settingsFor(dir: string, overrides: Partial<FleetSettings> = {}): Fleet
 		paneMode: "off",
 		herdrBin: FAKE_HERDR,
 		agentStartMs: 90_000,
-		loop: false,
+		// Tests decide idleness behaviour explicitly; the product default is 2 minutes.
+		idleGraceMs: 120_000,
+	loop: false,
 	notify: true,
 		...overrides,
 	};
@@ -296,8 +298,10 @@ test("an agent that settled without writing the contract is contract_failed, nev
 	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-idle-"));
 	const restore = useEnv({ FAKE_HERDR_LOG: join(dir, "herdr.log"), FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_AGENT_STATE: "idle" });
 	try {
-		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on" }));
-		const meta = await supervisor.dispatch(planFor(dir, settingsFor(dir, { paneMode: "on" })), "brief");
+		// The grace is what turns idleness into a failure, so this test sets it to
+		// zero: the product default waits two minutes first.
+		const supervisor = new Supervisor(settingsFor(dir, { paneMode: "on", idleGraceMs: 0 }));
+		const meta = await supervisor.dispatch(planFor(dir, settingsFor(dir, { paneMode: "on", idleGraceMs: 0 })), "brief");
 		assert.equal(await settle(supervisor, meta.id), "contract_failed");
 		const report = await supervisor.refresh(meta.id);
 		assert.equal(report.outcome.kind, "contract_failed");
@@ -392,7 +396,8 @@ test("an agent that pauses for a human keeps being watched, so the ping is not l
 
 		// One wait per pause is not enough: the first wait returns while the job is
 		// still running, and the work lands later.
-		const deadline = Date.now() + 15_000;
+		// Generous: the suite runs test files in parallel and each arm spawns a process.
+		const deadline = Date.now() + 25_000;
 		while (pings < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
 		assert.ok(pings >= 2, `the wait was re-armed after a pause (pings: ${pings})`);
 		const waits = herdrCalls(log).filter((call) => call.args[1] === "wait");
@@ -411,6 +416,31 @@ test("an agent that pauses for a human keeps being watched, so the ping is not l
 		const before = herdrCalls(log).filter((call) => call.args[1] === "wait").length;
 		await new Promise((resolve) => setTimeout(resolve, 600));
 		assert.equal(herdrCalls(log).filter((call) => call.args[1] === "wait").length, before, "a settled job stops re-arming");
+	} finally {
+		restore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an idle agent is not a failed job until the grace has passed", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-idle-grace-"));
+	const restore = useEnv({ FAKE_HERDR_LOG: join(dir, "herdr.log"), FAKE_HERDR_WORKSPACE: "wF", FAKE_HERDR_CWD: dir, FAKE_HERDR_AGENT_STATE: "idle" });
+	try {
+		const settings = settingsFor(dir, { paneMode: "on", idleGraceMs: 60_000 });
+		const supervisor = new Supervisor(settings);
+		const plan = planFor(dir, settings);
+		const meta = await supervisor.dispatch(plan, "brief");
+
+		// Idle means ready for input, not finished: the job keeps running and the
+		// clock starts, so a live run that pauses mid-task is not called a failure.
+		const first = await supervisor.refresh(meta.id);
+		assert.equal(first.outcome.kind, "running");
+		assert.equal(typeof supervisor.get(meta.id)?.idleSince, "number", "the idle clock started");
+
+		// The work lands later: the contract is what settles it.
+		writeFileSync(plan.paths.resultPath, JSON.stringify({ ticket: "42", status: "implemented", branch: "b", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } }));
+		const second = await supervisor.refresh(meta.id);
+		assert.equal(second.outcome.kind, "complete");
 	} finally {
 		restore();
 		rmSync(dir, { recursive: true, force: true });

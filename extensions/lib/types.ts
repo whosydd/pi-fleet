@@ -73,6 +73,8 @@ export interface JobMeta {
 	agentName?: string;
 	/** Last agent lifecycle state a harvest observed. Records waiting-for-a-human; never decides success. */
 	agentStatus?: string;
+	/** First time this job was seen idle without a contract; cleared when the agent works again. */
+	idleSince?: number;
 	/** When FleetCleanup closed the pane's tab; absent while it stays open. */
 	paneClosedAt?: number;
 	/** Why an interactive dispatch fell back to a detached spawn, if it did. */
@@ -112,6 +114,8 @@ export interface FleetSettings {
 	herdrBin: string;
 	/** How long to wait for an executor TUI to come up before degrading to a spawn. */
 	agentStartMs: number;
+	/** How long an interactive agent may sit idle without a contract before the job is reported as failed. */
+	idleGraceMs: number;
 	/** Run the ticket's review loop without a model turn (PI_FLEET_LOOP=off disables). */
 	loop: boolean;
 	/** Ping a human when an executor finishes (PI_FLEET_NOTIFY=off disables). */

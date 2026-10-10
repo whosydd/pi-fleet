@@ -25,7 +25,9 @@ function settingsFor(dir: string): FleetSettings {
 		paneMode: "off",
 		herdrBin: "herdr",
 		agentStartMs: 90_000,
-		loop: false,
+		// Tests decide idleness behaviour explicitly; the product default is 2 minutes.
+		idleGraceMs: 120_000,
+	loop: false,
 	notify: true,
 	};
 }

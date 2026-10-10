@@ -535,14 +535,27 @@ export class Supervisor {
 					return { outcome: { kind: "failed", meta, error: meta.contractError } };
 				}
 				if (read.status === "idle" || read.status === "done") {
-					meta.state = "contract_failed";
-					meta.contractError = `the agent settled as ${read.status} without writing the contract: it answered in prose, or the brief never reached it. Read pane ${meta.pane?.paneId ?? "?"} and re-brief.`;
-					meta.finishedAt ??= Date.now();
+					// `idle` means the agent is ready for input, not that it finished: a live
+					// codex run was seen idle mid-task, and it committed several minutes later.
+					// Only idleness that persists and produces no contract is a failure.
+					meta.idleSince ??= Date.now();
+					if (Date.now() - meta.idleSince >= this.settings.idleGraceMs) {
+						meta.state = "contract_failed";
+						meta.contractError = `the agent has been ${read.status} for ${Math.round((Date.now() - meta.idleSince) / 1000)}s without writing the contract: it answered in prose, or the brief never reached it. Read pane ${meta.pane?.paneId ?? "?"} and re-brief.`;
+						meta.finishedAt ??= Date.now();
+						this.persist(meta);
+						return { outcome: { kind: "contract_failed", meta, error: meta.contractError } };
+					}
 					this.persist(meta);
-					return { outcome: { kind: "contract_failed", meta, error: meta.contractError } };
+					return { outcome: { kind: "running" } };
 				}
 				// working | unknown | blocked: still going. A blocked agent is waiting
-				// on a human, and the harvest text says so.
+				// on a human, and the harvest text says so. Work resuming clears the idle
+				// clock, so a long task that paused once does not drift toward failure.
+				if (meta.idleSince !== undefined) {
+					meta.idleSince = undefined;
+					this.persist(meta);
+				}
 				return { outcome: { kind: "running" } };
 			}
 			if (expired && child === undefined) {
