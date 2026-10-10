@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parseClaudeStdout, validateContract } from "./contract.ts";
+import { claudeFailureNote, parseClaudeStdout, validateContract } from "./contract.ts";
 import { schemaFor } from "./profiles.ts";
 import type { FleetSettings, JobMeta } from "./types.ts";
 
@@ -40,6 +40,10 @@ function pidAlive(pid: number): boolean {
 
 function readJson(path: string): unknown {
 	return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readIfExists(path: string): string {
+	return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
 
 export class Supervisor {
@@ -249,11 +253,17 @@ export class Supervisor {
 	private settle(meta: JobMeta): HarvestReport {
 		if (meta.state === "running") return { outcome: { kind: "running" } };
 		if (meta.state === "timeout" || meta.state === "failed") {
+			// claude puts its own reason in the stdout envelope and leaves
+			// stderr.log empty, so a bare "see stderr.log" pointer sends the reader
+			// to a file with nothing in it.
+			const detail = meta.executor === "claude" ? claudeFailureNote(readIfExists(meta.paths.stdoutPath)) : undefined;
 			const error =
 				meta.contractError ??
 				(meta.state === "timeout"
 					? `timed out after ${meta.timeoutMs}ms`
-					: `executor exited with code ${meta.exitCode ?? "unknown"}; see ${meta.paths.stderrPath}`);
+					: detail
+						? `executor exited with code ${meta.exitCode ?? "unknown"}: ${detail}`
+						: `executor exited with code ${meta.exitCode ?? "unknown"}; see ${meta.paths.stderrPath}`);
 			return {
 				outcome: { kind: "failed", meta, error },
 			};
@@ -274,7 +284,7 @@ export class Supervisor {
 		// claude writes the contract into stdout; pull it out and back-fill the
 		// result file so both executors leave the same artifact shape behind.
 		if (meta.executor === "claude") {
-			const stdoutText = existsSync(meta.paths.stdoutPath) ? readFileSync(meta.paths.stdoutPath, "utf8") : "";
+			const stdoutText = readIfExists(meta.paths.stdoutPath);
 			const parsed = parseClaudeStdout(stdoutText);
 			if (parsed.structured === undefined) {
 				meta.state = "contract_failed";

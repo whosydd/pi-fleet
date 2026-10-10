@@ -70,7 +70,7 @@ Contract: the executor's final output must be JSON. implement jobs report ticket
 
 const HARVEST_TOOL_DESCRIPTION = `Harvest a dispatched fleet job: checks whether the executor process finished, validates its result contract, and reports the outcome with the run dir for full logs.
 
-Outcomes: running (harvest again later), contract_complete (fold the result in and decide: close the ticket? dispatch the next frontier ticket?), contract_failed (read contract_error; fix the brief, not the schema), failed / timeout (read the run dir's stderr.log).
+Outcomes: running (harvest again later), contract_complete (fold the result in and decide: close the ticket? dispatch the next frontier ticket?), contract_failed (read contract_error; fix the brief, not the schema), failed / timeout (the reported error carries the executor's own reason when its output has one; otherwise read the run dir's stdout.log and stderr.log).
 
 A job you dispatched is not finished until a harvest says contract_complete. Do not close tickets, do not report the spec as done, and do not dispatch dependents before that.
 

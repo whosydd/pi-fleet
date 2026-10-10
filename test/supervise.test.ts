@@ -8,6 +8,8 @@ import { Supervisor } from "../extensions/lib/supervise.ts";
 
 /** The stand-in executor: honours -o like the real codex exec does. */
 const FAKE = new URL("./helpers/fake-codex.mjs", import.meta.url).pathname;
+/** The stand-in for a claude run the provider refused: exit 1, cause on stdout. */
+const FAKE_CLAUDE_REFUSED = new URL("./helpers/fake-claude-quota.mjs", import.meta.url).pathname;
 
 function settingsFor(dir: string): FleetSettings {
 	return {
@@ -160,6 +162,30 @@ test("an inherited running job past its wall-clock ceiling settles as timeout", 
 			assert.equal(report.outcome.meta.state, "timeout");
 			assert.match(report.outcome.error, /timed out after/);
 			assert.match(report.outcome.error, /stop it by hand/);
+		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a claude job the provider refused reports the refusal, not an empty stderr.log", { timeout: 30_000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-fleet-refused-"));
+	try {
+		const supervisor = new Supervisor(settingsFor(dir));
+		const plan = planFor(dir, "Build the thing.");
+		// The stand-in exits 1, writes nothing to stderr, and leaves the cause in
+		// its stdout envelope, exactly as a quota rejection does.
+		plan.executor = "claude";
+		plan.command = ["node", FAKE_CLAUDE_REFUSED];
+		const meta = supervisor.dispatch(plan, plan.prompt);
+
+		assert.equal(await settle(supervisor, meta.id), "failed");
+		const report = supervisor.refresh(meta.id);
+		assert.equal(report.outcome.kind, "failed");
+		if (report.outcome.kind === "failed") {
+			assert.match(report.outcome.error, /403/);
+			assert.match(report.outcome.error, /quota insufficient/);
+			assert.doesNotMatch(report.outcome.error, /see .*stderr\.log/);
 		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });

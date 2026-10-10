@@ -132,6 +132,33 @@ export function validateContract(taskKind: TaskKind, value: unknown): ContractCh
 
 interface ClaudeJson {
 	structured_output?: unknown;
+	is_error?: boolean;
+	result?: string;
+	api_error_status?: number | string | null;
+	terminal_reason?: string;
+}
+
+/**
+ * The reason claude gives for a run that produced no contract.
+ *
+ * A quota or authentication failure exits 1 with an empty stderr.log and puts
+ * the cause in the stdout envelope. Without this the harvest points the reader
+ * at a file that holds nothing. Returns undefined when the stdout is not a
+ * claude envelope or carries no error signal.
+ */
+export function claudeFailureNote(text: string): string | undefined {
+	const trimmed = text.trim();
+	if (trimmed === "") return undefined;
+	let parsed: ClaudeJson;
+	try {
+		parsed = JSON.parse(trimmed) as ClaudeJson;
+	} catch {
+		return undefined;
+	}
+	const failed = parsed.is_error === true || parsed.api_error_status != null || parsed.terminal_reason === "api_error";
+	if (!failed) return undefined;
+	const detail = typeof parsed.result === "string" && parsed.result.trim() !== "" ? parsed.result.trim() : `terminal_reason=${parsed.terminal_reason ?? "unknown"}`;
+	return parsed.api_error_status == null ? detail : `${detail} (api_error_status=${parsed.api_error_status})`;
 }
 
 /** Pull the contract out of `claude -p --output-format json` stdout. */
@@ -143,7 +170,9 @@ export function parseClaudeStdout(text: string): { structured?: unknown; error?:
 		return { error: `claude stdout was not JSON: ${error instanceof Error ? error.message : String(error)}` };
 	}
 	if (parsed.structured_output === undefined) {
-		return { error: "claude stdout had no structured_output field (is --json-schema supported by this version?)" };
+		// Prefer the executor's own reason: "no structured_output" is a symptom
+		// when the run died on quota, auth, or a refused tool permission.
+		return { error: claudeFailureNote(text) ?? "claude stdout had no structured_output field (is --json-schema supported by this version?)" };
 	}
 	return { structured: parsed.structured_output };
 }

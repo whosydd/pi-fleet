@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseClaudeStdout, validateContract } from "../extensions/lib/contract.ts";
+import { claudeFailureNote, parseClaudeStdout, validateContract } from "../extensions/lib/contract.ts";
 
 const implementContract = {
 	ticket: "42",
@@ -79,4 +79,28 @@ test("claude stdout: missing structured_output is an error naming the field", ()
 test("claude stdout: non-JSON is an error", () => {
 	const { error } = parseClaudeStdout("assistant said a thing");
 	assert.match(error!, /not JSON/);
+});
+
+const quotaEnvelope = JSON.stringify({
+	type: "result",
+	is_error: true,
+	api_error_status: 403,
+	terminal_reason: "api_error",
+	result: "Failed to authenticate. API Error: 403 subscription quota insufficient",
+});
+
+test("claude failure note: the envelope's own reason, with the status", () => {
+	assert.equal(claudeFailureNote(quotaEnvelope), "Failed to authenticate. API Error: 403 subscription quota insufficient (api_error_status=403)");
+});
+
+test("claude failure note: a healthy envelope yields nothing", () => {
+	assert.equal(claudeFailureNote(JSON.stringify({ is_error: false, result: "done", structured_output: implementContract })), undefined);
+	assert.equal(claudeFailureNote(""), undefined);
+	assert.equal(claudeFailureNote("not json"), undefined);
+});
+
+test("claude stdout: a refused call reports the refusal, not the missing field", () => {
+	const { error } = parseClaudeStdout(quotaEnvelope);
+	assert.match(error!, /quota insufficient/);
+	assert.doesNotMatch(error!, /structured_output/);
 });
