@@ -88,6 +88,10 @@ advisory、磁盘为准），本文件不复述。已移出清单的决定见文
   依赖：无（#29 依赖本项的评审 pane 复用）。
 
 - [ ] **#29 票内自动评审循环：implement → review → fix → …**（本仓库）
+  进展：决策已落地 `extensions/lib/loop.ts`（纯函数 `nextStep` + `blockerFindings`，
+  `test/loop.test.ts` 7 项全绿）。未接的是接线：`index.ts` 的 `onSettled` 目前只做 ping，
+  需要在那里 harvest → nextStep → 自动派下一步；review job 的 base 取自 implement 契约的
+  branch/commits；fix 轮 brief 由 blocker findings 文本组装；循环开关 `PI_FLEET_LOOP`。
   范围：循环不经模型，事件驱动挂在 `onSettled`：
   implement 契约过 → 自动派 review（claude，同 worktree，brief 带 base 与 diff 范围）；
   review 契约 `blockers>0` → 自动派 fix 轮（codex，brief 由 findings 组装，
