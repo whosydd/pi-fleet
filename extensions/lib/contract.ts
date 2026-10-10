@@ -58,11 +58,35 @@ function checkFindings(findings: unknown, label: string, fields: { key: string; 
 }
 
 /**
+ * Whether a contract's ticket names the ticket the job was dispatched for.
+ *
+ * A tracker id and a slug built from it are the same ticket: a job dispatched
+ * for `23-gitignore` may report `#23`, and a job dispatched for `42` may report
+ * `42-title-of-the-ticket`. The comparison is therefore normalized (no `#`, no
+ * surrounding space, lowercase) and allows a prefix on either side when the
+ * remainder starts at a hyphen. Anything else is a different ticket and the
+ * contract must say so — the orchestrator reads this field to decide whether the
+ * ticket is done, and an executor that copied the wrong number would otherwise
+ * close the wrong one.
+ */
+export function ticketsMatch(reported: string, expected: string): boolean {
+	const normalize = (value: string) => value.trim().replace(/^#+/, "").toLowerCase();
+	const a = normalize(reported);
+	const b = normalize(expected);
+	if (!a || !b) return false;
+	if (a === b) return true;
+	return a.startsWith(`${b}-`) || b.startsWith(`${a}-`);
+}
+
+/**
  * Structural validation of the two known contract shapes. Hand-rolled rather
  * than a JSON Schema engine: the shapes are fixed by this extension, and the
  * error must name the field, not the validator.
+ *
+ * `expectedTicket` closes the loop between the dispatch and the report: without
+ * it, a contract that answers a different ticket validates clean.
  */
-export function validateContract(taskKind: TaskKind, value: unknown): ContractCheck {
+export function validateContract(taskKind: TaskKind, value: unknown, expectedTicket?: string): ContractCheck {
 	const root = checkObject(value, "result");
 	if (typeof root === "string") return { ok: false, error: root };
 
@@ -73,6 +97,9 @@ export function validateContract(taskKind: TaskKind, value: unknown): ContractCh
 			checkString(root.branch, "result.branch"),
 		);
 		if (error) return { ok: false, error };
+		if (expectedTicket !== undefined && !ticketsMatch(String(root.ticket), expectedTicket)) {
+			return { ok: false, error: `result.ticket: "${String(root.ticket)}" is not the ticket this job was dispatched for ("${expectedTicket}")` };
+		}
 		if (!["implemented", "blocked", "failed"].includes(root.status as string)) {
 			return { ok: false, error: `result.status: must be implemented|blocked|failed, got "${String(root.status)}"` };
 		}

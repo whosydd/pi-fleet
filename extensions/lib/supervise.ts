@@ -602,7 +602,7 @@ export class Supervisor {
 			}
 		}
 
-		const check = validateContract(meta.taskKind, contract);
+		const check = validateContract(meta.taskKind, contract, meta.ticket);
 		meta.contractOk = check.ok;
 		if (!check.ok) {
 			meta.state = "contract_failed";

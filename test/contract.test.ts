@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { claudeFailureNote, parseClaudeStdout, validateContract } from "../extensions/lib/contract.ts";
+import { claudeFailureNote, parseClaudeStdout, ticketsMatch, validateContract } from "../extensions/lib/contract.ts";
 
 const implementContract = {
 	ticket: "42",
@@ -103,4 +103,23 @@ test("claude stdout: a refused call reports the refusal, not the missing field",
 	const { error } = parseClaudeStdout(quotaEnvelope);
 	assert.match(error!, /quota insufficient/);
 	assert.doesNotMatch(error!, /structured_output/);
+});
+
+test("a contract that answers another ticket fails, and a slug or a # is the same ticket", () => {
+	const good = { ticket: "23-gitignore", status: "implemented", branch: "fleet/23", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } };
+	assert.equal(validateContract("implement", good, "23-gitignore").ok, true);
+	assert.equal(validateContract("implement", { ...good, ticket: "#23" }, "23-gitignore").ok, true);
+	assert.equal(validateContract("implement", { ...good, ticket: "23" }, "23").ok, true);
+	assert.equal(validateContract("implement", { ...good, ticket: " 23-GitIgnore " }, "23-gitignore").ok, true);
+
+	// A different number is a different ticket, however close the text looks.
+	const wrong = validateContract("implement", { ...good, ticket: "#24" }, "23-gitignore");
+	assert.equal(wrong.ok, false);
+	assert.match(wrong.error ?? "", /is not the ticket this job was dispatched for/);
+	assert.match(wrong.error ?? "", /"#24"/);
+	assert.match(wrong.error ?? "", /"23-gitignore"/);
+	// 23 vs 230 is not a match: the prefix rule only accepts a hyphen boundary.
+	assert.equal(ticketsMatch("230", "23"), false);
+	assert.equal(ticketsMatch("", "23"), false);
+	assert.equal(validateContract("implement", good).ok, true, "expectedTicket stays optional");
 });
