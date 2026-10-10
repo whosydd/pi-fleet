@@ -77,6 +77,9 @@ test("reviewBriefFor picks its fixed point as meta.base, contract.branch, then H
 	assert.match(reviewBriefFor(meta({ base: "origin/main" }), {}), /git diff origin\/main\.\.HEAD/);
 	assert.match(reviewBriefFor(meta(), { branch: "fleet/42-work" }), /git diff fleet\/42-work\.\.HEAD/);
 	assert.match(reviewBriefFor(meta(), {}), /git diff HEAD~1\.\.HEAD/);
+	// Both present: the dispatch's own base wins over the one the contract reported,
+	// which is the only case the three assertions above leave unpinned.
+	assert.match(reviewBriefFor(meta({ base: "origin/main" }), { branch: "fleet/42-work" }), /git diff origin\/main\.\.HEAD/);
 });
 
 test("reviewBriefFor reports the commit count and names both review axes", () => {
