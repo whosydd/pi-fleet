@@ -78,7 +78,9 @@ It does not compute a frontier. The tracker's own convention defines one: an iss
 
 const CLEANUP_DESCRIPTION = `Close the Herdr tabs that fleet jobs created, once those jobs have settled.
 
-What it closes: only tabs this package created, and only when every job in them has been harvested. Never the worktree, never its Herdr workspace, never a pane you opened yourself. A tab holding an unsettled job is reported as blocked.
+What it closes: only tabs this package created, and only when every job in them has been harvested. Never the worktree, never a pane you opened yourself. A tab holding an unsettled job is reported as blocked.
+
+Closing the last tab of a worktree's workspace lets Herdr close that empty workspace too. That is expected: the next dispatch reopens it. The worktree and its files stay untouched either way.
 
 The run directory and every log survive cleanup, so a closed tab loses no evidence. Read the pane's output and the file changes first: that is what the pane is for.`;
 

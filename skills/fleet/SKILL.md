@@ -33,7 +33,9 @@ Run these steps once for each repository.
    fleet job runs as a Herdr pane and in no other way.
 4. Create the worktree. Run `herdr worktree create`. Run `herdr worktree` first
    to read the current syntax. The worktree arrives with its own Herdr
-   workspace, which `FleetDispatch` needs.
+   workspace, which `FleetDispatch` needs. Herdr closes that workspace when its
+   last tab closes, and cleanup closes exactly that tab. Dispatch reopens the
+   workspace on the next job, so a reused worktree needs no manual step.
 5. Re-run `/fleet-setup` after a `pi update`. `pi update` is the only thing that
    moves the upstream clone, and upstream moves skills between buckets. A
    planning path can then match no file, which loads no skill and reports

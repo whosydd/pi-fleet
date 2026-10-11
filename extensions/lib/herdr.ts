@@ -64,6 +64,20 @@ export function workspaceListArgv(): string[] {
 	return ["workspace", "list"];
 }
 
+/**
+ * `herdr worktree open` argv: restores the workspace of a worktree that has lost
+ * it.
+ *
+ * A worktree's workspace is not permanent. Herdr closes the workspace when its
+ * last tab closes, and cleanup closes that tab at the end of a run. The next
+ * dispatch of the same ticket then finds no workspace, and opening the worktree
+ * again is how it gets one. The open is idempotent, and `--no-focus` keeps the
+ * human's focus where it was.
+ */
+export function worktreeOpenArgv(path: string): string[] {
+	return ["worktree", "open", "--path", path, "--no-focus"];
+}
+
 export function tabCreateArgv(workspaceId: string, label: string, cwd: string): string[] {
 	return ["tab", "create", "--workspace", workspaceId, "--label", label, "--cwd", cwd, "--no-focus"];
 }
@@ -126,6 +140,12 @@ function parseJson(text: string): unknown {
 export function parseWorkspaceList(stdout: string): WorkspaceEntry[] | undefined {
 	const workspaces = (parseJson(stdout) as { result?: { workspaces?: unknown } } | undefined)?.result?.workspaces;
 	return Array.isArray(workspaces) ? (workspaces as WorkspaceEntry[]) : undefined;
+}
+
+/** The workspace id a `herdr worktree open` response reported, or undefined. */
+export function parseWorktreeOpen(stdout: string): string | undefined {
+	const id = (parseJson(stdout) as { result?: { workspace?: { workspace_id?: unknown } } } | undefined)?.result?.workspace?.workspace_id;
+	return typeof id === "string" && id !== "" ? id : undefined;
 }
 
 /** The tab and pane ids a `herdr tab create` response reported, or undefined. */

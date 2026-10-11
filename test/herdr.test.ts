@@ -9,8 +9,10 @@ import {
 	parsePaneSplit,
 	parseTabCreate,
 	parseWorkspaceList,
+	parseWorktreeOpen,
 	planPaneAction,
 	workspaceForWorktree,
+	worktreeOpenArgv,
 	zoneOf,
 	TAB_FANOUT_LIMIT,
 } from "../extensions/lib/herdr.ts";
@@ -51,6 +53,16 @@ test("the response parsers reject shapes they do not recognise instead of guessi
 	assert.equal(parsePaneSplit('{"result":{}}'), undefined);
 	assert.equal(parseWorkspaceList('{"result":{"workspaces":[]}}')?.length, 0);
 	assert.equal(parseWorkspaceList('{"result":{}}'), undefined);
+});
+
+test("worktree open restores a workspace, and an unrecognised answer restores nothing", () => {
+	assert.deepEqual(worktreeOpenArgv("/tmp/repo/.worktrees/p3"), ["worktree", "open", "--path", "/tmp/repo/.worktrees/p3", "--no-focus"]);
+	assert.equal(parseWorktreeOpen('{"result":{"workspace":{"workspace_id":"w25"}}}'), "w25");
+	// A worktree that was already open still names its workspace.
+	assert.equal(parseWorktreeOpen('{"result":{"already_open":true,"workspace":{"workspace_id":"w25"}}}'), "w25");
+	assert.equal(parseWorktreeOpen('{"result":{"workspace":{}}}'), undefined);
+	assert.equal(parseWorktreeOpen('{"result":{}}'), undefined);
+	assert.equal(parseWorktreeOpen("not json"), undefined);
 });
 
 test("agent get carries the lifecycle state, and an unknown state is not a state", () => {

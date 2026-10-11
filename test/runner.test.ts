@@ -149,13 +149,34 @@ test("dispatch refuses outside Herdr, and says how to fix it", async () => {
 	}
 });
 
-test("dispatch refuses when no workspace owns the worktree", async () => {
-	const h = harness({ FAKE_HERDR_CWD: "/somewhere/else" });
+test("dispatch refuses when Herdr gives no workspace and reopening the worktree fails", async () => {
+	const h = harness({ FAKE_HERDR_CWD: "/somewhere/else", FAKE_HERDR_OPEN_FAIL: "1" });
 	try {
 		const outcome = await new Runner(h.settings).dispatch(dispatchInput(h));
 		assert.equal(outcome.ok, false);
 		assert.match(outcome.ok ? "" : outcome.error, /no Herdr workspace owns/);
 		assert.match(outcome.ok ? "" : outcome.error, /herdr worktree create/);
+		assert.deepEqual(h.logCalls().map((call) => call.slice(0, 2).join(" ")), ["workspace list", "worktree open"]);
+	} finally {
+		cleanup(h);
+	}
+});
+
+test("a worktree whose workspace Herdr closed is reopened, and the pane lands there", async () => {
+	// Cleanup closes the ticket's last fleet tab, and Herdr closes the empty
+	// workspace with it. The next dispatch must reopen the worktree's workspace
+	// rather than run the executor inside the orchestrator's own workspace.
+	const h = harness({ FAKE_HERDR_CWD: "/somewhere/else", FAKE_HERDR_OPEN_WORKSPACE: "wN" });
+	try {
+		const runner = new Runner(h.settings);
+		claimTicket(h.ticketPath);
+		const outcome = await runner.dispatch(dispatchInput(h));
+		assert.equal(outcome.ok, true, outcome.ok ? "" : outcome.error);
+		if (!outcome.ok) return;
+		assert.equal(outcome.meta.pane?.workspaceId, "wN");
+		const calls = h.logCalls();
+		assert.deepEqual(calls.slice(0, 3).map((call) => call.slice(0, 2).join(" ")), ["workspace list", "worktree open", "tab create"]);
+		assert.equal(calls[2]![calls[2]!.indexOf("--workspace") + 1], "wN");
 	} finally {
 		cleanup(h);
 	}

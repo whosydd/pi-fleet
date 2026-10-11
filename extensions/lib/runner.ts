@@ -36,10 +36,13 @@ import {
 	parsePaneSplit,
 	parseTabCreate,
 	parseWorkspaceList,
+	parseWorktreeOpen,
 	planPaneAction,
 	tabCloseArgv,
 	tabCreateArgv,
 	workspaceForWorktree,
+	workspaceListArgv,
+	worktreeOpenArgv,
 	zoneOf,
 	AGENT_START_CALL_MS,
 	CALL_MS,
@@ -139,7 +142,7 @@ export class Runner {
 		}
 		const workspaceId = await this.#workspaceFor(input.worktree);
 		if (!workspaceId) {
-			return { ok: false, error: `no Herdr workspace owns ${input.worktree}. Create the worktree with \`herdr worktree create\` so it arrives with its own workspace, then dispatch.` };
+			return { ok: false, error: `no Herdr workspace owns ${input.worktree}, and reopening it failed. Create the worktree with \`herdr worktree create\`, then dispatch.` };
 		}
 
 		const now = Date.now();
@@ -403,15 +406,28 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 		return read.ok ? parseAgentGet(read.stdout) : undefined;
 	}
 
-	/** The workspace whose worktree is this path, else this session's own. */
+	/**
+	 * The workspace that hosts this worktree.
+	 *
+	 * A worktree's workspace is not permanent: Herdr closes it when its last tab
+	 * closes, and cleanup closes exactly that tab at the end of a run. So a match
+	 * miss is not an error yet — `worktree open` restores the workspace and is
+	 * idempotent, and only its failure means this path cannot host a job.
+	 *
+	 * There is deliberately no fallback to this session's own workspace. That
+	 * fallback would put the executor's pane in the orchestrator's column, which
+	 * is not the delivery this package promises: a pane exists so a human reads
+	 * the work beside the ticket, not inside their own session.
+	 */
 	async #workspaceFor(worktree: string): Promise<string | undefined> {
-		const listed = await this.#call(["workspace", "list"], CALL_MS);
+		const listed = await this.#call(workspaceListArgv(), CALL_MS);
 		if (listed.ok) {
 			const entries = parseWorkspaceList(listed.stdout);
 			const match = entries ? workspaceForWorktree(entries, worktree) : undefined;
 			if (match) return match;
 		}
-		return process.env.HERDR_WORKSPACE_ID?.trim() || undefined;
+		const opened = await this.#call(worktreeOpenArgv(worktree), CALL_MS);
+		return opened.ok ? parseWorktreeOpen(opened.stdout) : undefined;
 	}
 
 	/**
