@@ -192,6 +192,26 @@ test("a review reuses the pane the first review used, and never a second tab", a
 	}
 });
 
+test("waitAgent reports Herdr's state signal, and gives undefined when the name is gone", async () => {
+	const h = harness({ FAKE_HERDR_AGENT_STATE: "idle" });
+	try {
+		const read = await new Runner(h.settings).waitAgent("fleet-03-ab", 1000);
+		assert.equal(read?.status, "idle");
+		assert.deepEqual(h.logCalls().at(-1)?.slice(0, 2), ["agent", "wait"]);
+	} finally {
+		cleanup(h);
+	}
+
+	const gone = harness({ FAKE_HERDR_AGENT_GONE: "1" });
+	try {
+		// A vanished name is not an error to retry forever: the harvest that follows
+		// settles the job as failed.
+		assert.equal(await new Runner(gone.settings).waitAgent("fleet-03-ab", 1000), undefined);
+	} finally {
+		cleanup(gone);
+	}
+});
+
 test("harvest runs while the agent works, and settles only on the contract", async () => {
 	const h = harness({ FAKE_HERDR_AGENT_STATE: "working" });
 	try {

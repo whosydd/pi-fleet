@@ -91,6 +91,17 @@ export function agentPromptArgv(name: string, task: string): string[] {
 	return ["agent", "prompt", name, task];
 }
 
+/**
+ * `herdr agent wait` argv.
+ *
+ * Without `--until`, Herdr matches any settled state (`idle`, `done`, `blocked`)
+ * and returns as soon as the agent reaches one. That is a state signal and not a
+ * verdict: the contract file still decides success.
+ */
+export function agentWaitArgv(name: string, timeoutMs: number): string[] {
+	return ["agent", "wait", name, "--timeout", String(timeoutMs)];
+}
+
 export function agentGetArgv(name: string): string[] {
 	return ["agent", "get", name];
 }

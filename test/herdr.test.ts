@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	agentName,
+	agentWaitArgv,
 	isAgentWaiting,
 	occupancyOf,
 	parseAgentGet,
@@ -24,6 +25,10 @@ test("workspace lookup matches a worktree by real path, including macOS /private
 	assert.equal(workspaceForWorktree(entries, "/tmp/repo/.worktrees/p4"), undefined);
 	// An entry with no id cannot be selected, however well its path matches.
 	assert.equal(workspaceForWorktree([{ cwd: "/tmp/x" }], "/tmp/x"), undefined);
+});
+
+test("agent wait asks Herdr for a state change, not for a verdict", () => {
+	assert.deepEqual(agentWaitArgv("fleet-03-ab", 300_000), ["agent", "wait", "fleet-03-ab", "--timeout", "300000"]);
 });
 
 test("agent names stay inside Herdr's alphabet, whichever ticket they come from", () => {

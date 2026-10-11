@@ -29,6 +29,7 @@ import {
 	agentName,
 	agentPromptArgv,
 	agentStartArgv,
+	agentWaitArgv,
 	occupancyOf,
 	paneSplitArgv,
 	parseAgentGet,
@@ -378,6 +379,22 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 	/** Ping a human through Herdr. Failures are silent: a missing channel must not disturb a dispatch. */
 	async notify(title: string, body: string): Promise<boolean> {
 		return (await this.#call(["notification", "show", title, "--body", body, "--sound", "done"], CALL_MS)).ok;
+	}
+
+	/**
+	 * Wait for one executor to change lifecycle state, and report what Herdr saw.
+	 *
+	 * A state signal is not a verdict: `idle` and `done` mean ready for input, so
+	 * the caller harvests after every wake-up and the contract file still decides
+	 * whether the work landed. Returns undefined when Herdr no longer knows the
+	 * name, which the caller's harvest reports as a failure.
+	 *
+	 * pi's patience outlasts Herdr's own timeout on purpose: a shorter execFile
+	 * deadline would kill a wait that was still valid.
+	 */
+	async waitAgent(name: string, timeoutMs: number): Promise<AgentRead | undefined> {
+		const waited = await this.#call(agentWaitArgv(name, timeoutMs), timeoutMs + 30_000);
+		return waited.ok ? parseAgentGet(waited.stdout) : undefined;
 	}
 
 	/** The agent's reported lifecycle state, or undefined when Herdr no longer knows the name. */

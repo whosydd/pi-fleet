@@ -80,6 +80,11 @@ ticket, a missing worktree, and a fix round past the cap.
 The executor is a Herdr agent. It is not a child of this turn. Do not poll it.
 Do not harvest in the same turn.
 
+The extension watches the run directory and wakes this session with a user
+message when the job settles, so the loop continues by itself: harvest, then
+review, then commit. When `PI_FLEET_AUTO_CONTINUE=off`, no message comes and you
+wait for the human instead.
+
 ### 4. Harvest the build
 
 Call `FleetHarvest` with the job id. Act on the outcome:

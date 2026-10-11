@@ -1,7 +1,9 @@
 # pi-fleet
 
 One ticket at a time in a Herdr pane: a Codex or Claude executor builds it, the
-other harness reviews it, and pi judges the contract that comes back.
+other harness reviews the uncommitted change, pi commits it, and pi judges the
+contract that comes back. A settled job wakes pi by itself, so the hand-off from
+build to review needs no prompting.
 
 ## Install
 
@@ -219,6 +221,7 @@ Read once at load.
 | `PI_FLEET_AGENT_START_MS` | `90000` | How long Herdr waits for an executor TUI. |
 | `PI_FLEET_IDLE_GRACE_MS` | `120000` | Idle-without-contract grace before failure. |
 | `PI_FLEET_GIT_GUARD` | `on` | Block `git stash`, `commit --amend`, and force push in this session's bash calls. |
+| `PI_FLEET_AUTO_CONTINUE` | `on` | Watch dispatched jobs with `herdr agent wait` and wake the session with a user message when one settles. `off` makes the loop wait for the human. |
 | `PI_FLEET_CODEX_BIN` | `codex` | Codex binary. |
 | `PI_FLEET_CLAUDE_BIN` | `claude` | Claude binary. |
 | `PI_FLEET_HERDR_BIN` | `herdr` | Herdr binary. |

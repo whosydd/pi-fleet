@@ -44,17 +44,20 @@ import { defaultExecutor } from "./lib/selection.ts";
 import { INSTALL_SCRIPT } from "./lib/skills.ts";
 import { claimTicket, READY, setStatus } from "./lib/tickets.ts";
 import { isExecutorKind, readSettings, type FleetRole, type JobMeta } from "./lib/types.ts";
+import { wakeMessage, WATCH_THROTTLE_MS, WATCH_WAIT_SLICE_MS } from "./lib/watch.ts";
 
 const execFileAsync = promisify(execFile);
 
 const DISPATCH_DESCRIPTION = `Hand one ticket to one executor and get a job id back. The executor runs in its own git worktree, in a Herdr pane next to you, and writes a contract file when it stops.
 
-What the tool does for you: claims the ticket (rewrites its Status line to "claimed"), creates the run directory, writes the brief and the JSON schema, opens or reuses the ticket's Herdr tab, starts the executor's own TUI, and delivers the task. What it will not do: create the worktree, pick the executor's tools, set its permissions, or pay its bill.
+An implement job leaves its changes uncommitted. The review job reads that working tree, and you commit only after the review passes.
+
+What the tool does for you: claims the ticket (rewrites its Status line to "claimed"), creates the run directory, writes the brief and the JSON schema, opens or reuses the ticket's Herdr tab in the worktree's own workspace, starts the executor's own TUI, and delivers the task. When Herdr has closed that workspace — it closes an empty worktree workspace with the last tab cleanup closes — the tool reopens it instead of running the executor in the orchestrator's workspace. What it will not do: create the worktree, pick the executor's tools, set its permissions, or pay its bill.
 
 The brief is what the executor sees — it never sees this conversation. Copy the ticket's text in; the ticket file itself stays out of the worktree.
 
 Rules this tool enforces rather than leaves to you:
-- role "review" needs base: the commit, branch, or tag to diff against. Reviews see committed work only, so commit before dispatching one.
+- role "review" needs base: the commit, branch, or tag the work was built on. The review reads the uncommitted working tree, so stage it with \`git -C <worktree> add -A\` before dispatching one.
 - A review must run on the harness that did not write the code. Omit executor and the tool picks the other one on its own.
 - fix_round is capped in code. Past the cap the tool refuses; escalate to the user instead of rephrasing the same brief.
 - A ticket is claimable only from status "${"ready-for-agent"}", so two dispatches cannot take the same ticket.
@@ -135,6 +138,65 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			return reason ? { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } } : undefined;
 		});
 	}
+
+	// -----------------------------------------------------------------------
+	// Settle watcher
+
+	/**
+	 * Jobs this session waits on, and the loops that ask after them.
+	 *
+	 * A dispatch ends the turn, so without a watcher the loop only moves when the
+	 * human speaks again. `pi.sendUserMessage` always starts a turn: that is the
+	 * hook which carries a settled job back to the orchestrator by itself, so a
+	 * finished build is harvested and reviewed without anyone typing a prompt.
+	 *
+	 * The waiting is Herdr's own state signal (`agent wait`), which returns the
+	 * moment the executor changes lifecycle state. That signal is not a verdict:
+	 * `idle` and `done` mean ready for input, so every wake-up harvests the run
+	 * directory and the contract file still decides whether the work landed.
+	 */
+	const watched = new Map<string, JobMeta>();
+
+	const sleep = (ms: number) =>
+		new Promise<void>((resolve) => {
+			setTimeout(resolve, ms).unref();
+		});
+
+	function stopWatching(id: string): void {
+		watched.delete(id);
+	}
+
+	function watchJob(meta: JobMeta): void {
+		if (!settings.autoContinue || meta.contractOk !== undefined || watched.has(meta.id)) return;
+		watched.set(meta.id, meta);
+		void watchLoop(meta.id);
+	}
+
+	async function watchLoop(id: string): Promise<void> {
+		while (watched.has(id)) {
+			const agent = watched.get(id)?.pane?.agentName;
+			// A live name wakes this loop on the next state change. A job whose agent is
+			// gone skips the wait, so harvest can settle it as failed.
+			if (agent) await runner.waitAgent(agent, WATCH_WAIT_SLICE_MS);
+
+			const report = await runner.harvest(id);
+			if (report.kind === "running") {
+				await sleep(WATCH_THROTTLE_MS);
+				continue;
+			}
+			const meta = watched.get(id);
+			// A human may have harvested this job while the wait was open. Then the
+			// verdict is already read, and a second wake-up would be a false alarm.
+			if (!meta) return;
+			stopWatching(id);
+			pi.sendUserMessage(wakeMessage(meta, report.kind), { deliverAs: "followUp" });
+			return;
+		}
+	}
+
+	// A job dispatched by an earlier session is still on disk. Adopt it, so a
+	// reload or a restart resumes the loop instead of stranding the ticket.
+	for (const job of runner.all()) watchJob(job);
 
 	// -----------------------------------------------------------------------
 	// Dispatch
@@ -240,6 +302,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 				return textResult(`dispatch failed, ticket ${ticket.id} released: ${outcome.error}`, { status: "rejected" });
 			}
 			const meta = outcome.meta;
+			watchJob(meta);
 			return textResult(
 				`Dispatched ${meta.id} — ticket ${meta.ticket} ${meta.role} on ${meta.executor}.${meta.base ? ` Base: ${meta.base}.` : ""}\n` +
 					`Pane: ${meta.pane?.paneId} (tab ${meta.pane?.tabId}, agent ${meta.pane?.agentName}). Watch it there, answer it if it asks you something, interrupt it with Esc.\n` +
@@ -288,6 +351,8 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			// `running`, `complete`, `contract_failed`, and `failed` all carry a readable
 			// meta, so the bookkeeping below is safe; `unknown` returned above.
 			const meta = report.meta;
+			// A job the human harvested by hand needs no wake-up message later.
+			stopWatching(jobId);
 			if (meta.harvestedAt === undefined) {
 				meta.harvestedAt = Date.now();
 				// Persist through the runner's writer so the run directory and this

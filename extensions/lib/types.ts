@@ -89,6 +89,8 @@ export interface FleetSettings {
 	idleGraceMs: number;
 	/** Block git stash, git commit --amend, and force push (PI_FLEET_GIT_GUARD=off disables). */
 	gitGuard: boolean;
+	/** Wake the session with a user message when a job settles (PI_FLEET_AUTO_CONTINUE=off disables). */
+	autoContinue: boolean;
 	codexBin: string;
 	claudeBin: string;
 	herdrBin: string;
@@ -118,6 +120,7 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env, cwd: string =
 		agentStartMs: parsePositive(env.PI_FLEET_AGENT_START_MS, 90_000),
 		idleGraceMs: parsePositive(env.PI_FLEET_IDLE_GRACE_MS, 120_000),
 		gitGuard: (env.PI_FLEET_GIT_GUARD || "on").toLowerCase() !== "off",
+		autoContinue: (env.PI_FLEET_AUTO_CONTINUE || "on").toLowerCase() !== "off",
 		codexBin: env.PI_FLEET_CODEX_BIN || "codex",
 		claudeBin: env.PI_FLEET_CLAUDE_BIN || "claude",
 		herdrBin: env.PI_FLEET_HERDR_BIN || "herdr",
