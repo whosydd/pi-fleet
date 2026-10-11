@@ -2,19 +2,18 @@
  * Headless load smoke test: load this package through pi's own loader, without
  * making a model call.
  *
- * Two claims are checked, because this package is one artifact with two halves.
- * The extension half must register its tools and its setup command. The skill
- * half must load the fleet skill and must not load the execution set, which is
- * the boundary the whole design rests on.
- *
- * The planning set is deliberately absent here: it is installed into the project
- * from upstream behind a settings filter, not shipped by this package.
+ * The smoke test judges the artifact it was pointed at. It fails when the entry
+ * under test fails to load, when the session does not activate all four fleet
+ * tools from that exact entry, or when the one fleet skill does not load cleanly.
+ * It judges the entry by path, not by a substring or another pi-fleet install,
+ * so an installed copy cannot answer for this tree. It still forbids vendored
+ * upstream skill sets, because a second copy can win a name collision.
  *
  * Run with `npm run smoke`.
  */
 
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	createAgentSession,
@@ -24,65 +23,92 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { FLEET_TOOLS, judgeSmoke, type LoadedTool, type SmokeDecision, type SmokeInput } from "../extensions/lib/smoke.ts";
+import { PACKAGE_ROOT } from "../extensions/lib/skills.ts";
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const entry = join(root, "extensions", "index.ts");
-const cwd = process.cwd();
-const agentDir = getAgentDir();
-
-const loader = new DefaultResourceLoader({
-	cwd,
-	agentDir,
-	additionalExtensionPaths: [entry],
-	noSkills: true,
-	noPromptTemplates: true,
-	noThemes: true,
-	noContextFiles: true,
-});
-await loader.reload();
-
-const loaded = loader.getExtensions();
-const ours = loaded.extensions.filter((extension) => extension.path.includes("pi-fleet"));
-console.log(`loaded extensions: ${loaded.extensions.length}`);
-for (const extension of ours) {
-	console.log(`ours: ${extension.path}`);
-	console.log(`      tools: ${[...(extension.tools?.keys() ?? [])].join(", ")}`);
-}
-const errors = (loaded as { errors?: unknown[] }).errors;
-if (errors && errors.length > 0) console.log("loader errors:", errors);
-
-// The skill half: the one skill this package ships, and the assertion that it
-// ships no upstream copy of the other two sets. A vendored planning skill wins
-// the name collision against the project's upstream install and freezes the
-// orchestrator on it; a vendored execution skill makes the executor load two
-// revisions of one skill at once.
-const fleet = loadSkillsFromDir({ dir: join(root, "skills", "fleet"), source: "pi-fleet" });
-const names = fleet.skills.map((skill) => skill.name).sort();
-console.log(`skills this package ships (${names.length}): ${names.join(", ")}`);
-if (fleet.diagnostics.length > 0) console.log("skill diagnostics:", fleet.diagnostics);
-for (const side of ["planning", "execution"]) {
-	if (existsSync(join(root, "skills", side))) {
-		console.log(`skills/${side} exists: both upstream sets are installed or provided elsewhere, not vendored here`);
-		process.exitCode = 1;
-	}
-}
-if (!existsSync(join(root, ".pi", "settings.json"))) {
-	console.log("no .pi/settings.json: run /fleet-setup to install the planning skills into this project");
+interface SmokeOptions {
+	root: string;
+	entry: string;
+	cwd: string;
+	agentDir: string;
 }
 
-try {
-	const { session } = await createAgentSession({
-		cwd,
-		agentDir,
-		sessionManager: SessionManager.inMemory(cwd),
-		settingsManager: SettingsManager.create(cwd, agentDir),
-		resourceLoader: loader,
+export async function runSmoke(options: SmokeOptions): Promise<SmokeDecision> {
+	const loader = new DefaultResourceLoader({
+		cwd: options.cwd,
+		agentDir: options.agentDir,
+		additionalExtensionPaths: [options.entry],
+		noSkills: true,
+		noPromptTemplates: true,
+		noThemes: true,
+		noContextFiles: true,
 	});
-	const active = session.getActiveToolNames();
-	console.log(
-		`active tools: FleetDispatch=${active.includes("FleetDispatch")} FleetHarvest=${active.includes("FleetHarvest")} FleetStatus=${active.includes("FleetStatus")} FleetCleanup=${active.includes("FleetCleanup")}`,
-	);
-	session.dispose();
-} catch (error) {
-	console.log(`session creation skipped: ${error instanceof Error ? error.message : String(error)}`);
+	await loader.reload();
+
+	const loaded = loader.getExtensions();
+	let sessionError: string | undefined;
+	let activeToolNames: string[] = [];
+	let tools: LoadedTool[] = [];
+	try {
+		const { session } = await createAgentSession({
+			cwd: options.cwd,
+			agentDir: options.agentDir,
+			sessionManager: SessionManager.inMemory(options.cwd),
+			settingsManager: SettingsManager.create(options.cwd, options.agentDir),
+			resourceLoader: loader,
+		});
+		try {
+			activeToolNames = session.getActiveToolNames();
+			tools = session.getAllTools();
+		} finally {
+			session.dispose();
+		}
+	} catch (error) {
+		sessionError = error instanceof Error ? error.message : String(error);
+	}
+
+	const fleet = loadSkillsFromDir({ dir: join(options.root, "skills", "fleet"), source: "pi-fleet" });
+	const input: SmokeInput = {
+		entry: options.entry,
+		extensions: loaded.extensions.map((extension) => ({
+			path: extension.path,
+			resolvedPath: extension.resolvedPath,
+			toolNames: [...(extension.tools?.keys() ?? [])],
+		})),
+		loadErrors: loaded.errors,
+		activeToolNames,
+		tools,
+		skillNames: fleet.skills.map((skill) => skill.name),
+		skillDiagnostics: fleet.diagnostics.map((diagnostic) => diagnostic.message),
+		vendoredSkillSets: ["planning", "execution"].filter((side) => existsSync(join(options.root, "skills", side))),
+		sessionError,
+	};
+	const decision = judgeSmoke(input);
+
+	console.log(`loaded extensions: ${loaded.extensions.length}`);
+	console.log(`entry under test: ${options.entry}`);
+	for (const extension of decision.entryExtensions) {
+		console.log(`ours: ${extension.path}`);
+		console.log(`      tools: ${extension.toolNames.join(", ")}`);
+	}
+	const otherErrors = loaded.errors.filter((error) => error.path !== options.entry);
+	if (otherErrors.length > 0) {
+		console.log(`other loader errors: ${otherErrors.map((error) => `${error.path}: ${error.error}`).join("; ")}`);
+	}
+	console.log(`active tools: ${FLEET_TOOLS.map((name) => `${name}=${activeToolNames.includes(name)}`).join(" ")}`);
+	console.log(`active tools from entry: ${decision.activeToolsFromEntry.join(", ")}`);
+	console.log(`skills this package ships (${decision.skillNames.length}): ${decision.skillNames.join(", ")}`);
+
+	return decision;
+}
+
+function isMain(importPath: string, argvPath: string): boolean {
+	return argvPath !== "" && importPath === resolve(argvPath);
+}
+
+if (isMain(fileURLToPath(import.meta.url), process.argv[1] ?? "")) {
+	const entry = join(PACKAGE_ROOT, "extensions", "index.ts");
+	const result = await runSmoke({ root: PACKAGE_ROOT, entry, cwd: process.cwd(), agentDir: getAgentDir() });
+	for (const failure of result.failures) console.error(failure);
+	if (!result.ok) process.exit(1);
 }
