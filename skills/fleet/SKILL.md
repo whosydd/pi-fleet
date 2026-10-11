@@ -166,13 +166,16 @@ commit comes first: cleanup closes the tab, and an uncommitted worktree holds th
 only copy of the work. Read the pane's output and the file changes before that.
 The run directory keeps every log, so a closed tab loses no evidence.
 
-Then remove the worktree of a ticket that is `done`:
+Then remove the worktree and the branch of a ticket that is `done`:
 
     git worktree remove <worktree>
+    git branch -d <branch>
 
-Use the git command, not `herdr worktree remove`: cleanup has just closed the
-worktree's last tab, Herdr closed the workspace with it, and the Herdr command
-matches only a live workspace.
+Use `git branch -d`, not `-D`: the safe form refuses a branch that is not merged,
+which is the check worth having here. Use the git command for the worktree too,
+not `herdr worktree remove`: cleanup has just closed the worktree's last tab,
+Herdr closed the workspace with it, and the Herdr command matches only a live
+workspace.
 
 ## Rules that hold at every step
 

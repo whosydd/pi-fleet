@@ -122,7 +122,7 @@
 - **pi 提交**：`3977960 fix(smoke): make the smoke decision a pure function`（在 `5f202eb` 之上）。
   票 `Status: done`，5 个 settled job 的 tab 已 cleanup。
 - **合并与清理**：`bfb4ccb merge: ticket 01, the smoke test now judges what it loads`；合并后
-  `npm run check` 89 通过。随后用 `git worktree remove` 删掉票 01 的 worktree。
+  `npm run check` 89 通过。随后 `git worktree remove` 删 worktree，`git branch -d` 删分支。
   `herdr worktree remove` 此处不可用：cleanup 关掉最后一个 tab 后 Herdr 回收了 workspace，
   它只认活着的 workspace（`workspace_not_found`）。
 
@@ -147,8 +147,8 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
    否则 `git diff` 看不到新文件。
 3. review 无阻塞 → pi 自己 `git commit`（conventional commit，subject 取票标题），
    `git merge --no-ff` 合入 main，合并后跑一遍 `npm run check`，再把票设 `done` 并记下
-   branch 与 sha。最后 `FleetCleanup` 关 tab，`git worktree remove` 删 worktree
-   （`herdr worktree remove` 只认活着的 workspace，此处不可用）。
+   branch 与 sha。最后 `FleetCleanup` 关 tab，`git worktree remove` 删 worktree，
+   `git branch -d <branch>` 删分支（`herdr worktree remove` 只认活着的 workspace，此处不可用）。
 4. review 有阻塞 → 票设回 `ready-for-agent` → codex 在同一未提交工作树上改 →
    重新 review。轮数上限照旧（`PI_FLEET_MAX_FIX_ROUND`，默认 2）。
 5. 派发文本不再一刀切禁止子代理（implement 侧删除该禁令）；review 侧保留反递归
