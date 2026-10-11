@@ -1,14 +1,122 @@
 /**
- * Result contract: validate what the executor wrote. Pure: every function
- * takes already-read text or already-parsed JSON and returns plain values.
+ * The result contract: its shape, and the validation of what the executor wrote.
+ *
+ * Pure. Every function takes already-read text or already-parsed JSON and
+ * returns plain values, so every rule and every error message is testable
+ * without a session and without a model call.
+ *
+ * Two shapes are fixed here — one per role — and the same schemas are written
+ * into the run directory for the executor to read. The executor's exit code is
+ * not evidence: a zero exit with a broken contract is `contract_failed`, and
+ * only this module decides that.
  */
 
-import type { TaskKind } from "./types.ts";
+import type { FleetRole } from "./types.ts";
 
 export interface ContractCheck {
 	ok: boolean;
 	error?: string;
 }
+
+/**
+ * Plain JSON Schema for the implement role; no `format` keywords anywhere,
+ * because claude treats them as annotations.
+ */
+export const IMPLEMENT_SCHEMA = {
+	type: "object",
+	properties: {
+		ticket: { type: "string" },
+		status: { type: "string", enum: ["implemented", "blocked", "failed"] },
+		branch: { type: "string" },
+		commits: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: { sha: { type: "string" }, subject: { type: "string" } },
+				required: ["sha", "subject"],
+				additionalProperties: false,
+			},
+		},
+		tests: {
+			type: "object",
+			properties: {
+				command: { type: "string" },
+				passed: { type: "number" },
+				failed: { type: "number" },
+			},
+			required: ["command", "passed", "failed"],
+			additionalProperties: false,
+		},
+		blocked_reason: { type: "string" },
+		notes: { type: "string" },
+	},
+	required: ["ticket", "status", "branch", "commits", "tests"],
+	additionalProperties: false,
+} as const;
+
+/**
+ * The review role's two axes, never merged: `standards` is how this repository
+ * writes code, `spec` is whether the code does what the ticket asked.
+ */
+export const REVIEW_SCHEMA = {
+	type: "object",
+	properties: {
+		base: { type: "string" },
+		standards: {
+			type: "object",
+			properties: {
+				worst_issue: { type: "string" },
+				findings: {
+					type: "array",
+					items: {
+						type: "object",
+						properties: {
+							rule: { type: "string" },
+							file: { type: "string" },
+							line: { type: "number" },
+							quote: { type: "string" },
+						},
+						required: ["rule", "file", "line", "quote"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["worst_issue", "findings"],
+			additionalProperties: false,
+		},
+		spec: {
+			type: "object",
+			properties: {
+				spec_found: { type: "boolean" },
+				worst_issue: { type: "string" },
+				findings: {
+					type: "array",
+					items: {
+						type: "object",
+						properties: {
+							quote: { type: "string" },
+							file: { type: "string" },
+							line: { type: "number" },
+						},
+						required: ["quote", "file", "line"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["spec_found", "worst_issue", "findings"],
+			additionalProperties: false,
+		},
+	},
+	required: ["base", "standards", "spec"],
+	additionalProperties: false,
+} as const;
+
+export function schemaFor(role: FleetRole): object {
+	return role === "implement" ? IMPLEMENT_SCHEMA : REVIEW_SCHEMA;
+}
+
+// ---------------------------------------------------------------------------
+// Validation
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -61,13 +169,10 @@ function checkFindings(findings: unknown, label: string, fields: { key: string; 
  * Whether a contract's ticket names the ticket the job was dispatched for.
  *
  * A tracker id and a slug built from it are the same ticket: a job dispatched
- * for `23-gitignore` may report `#23`, and a job dispatched for `42` may report
- * `42-title-of-the-ticket`. The comparison is therefore normalized (no `#`, no
+ * for `23-gitignore` may report `#23`. The comparison is normalized (no `#`, no
  * surrounding space, lowercase) and allows a prefix on either side when the
- * remainder starts at a hyphen. Anything else is a different ticket and the
- * contract must say so — the orchestrator reads this field to decide whether the
- * ticket is done, and an executor that copied the wrong number would otherwise
- * close the wrong one.
+ * remainder starts at a hyphen. Anything else is a different ticket, and the
+ * orchestrator reads this field to decide whether the ticket is done.
  */
 export function ticketsMatch(reported: string, expected: string): boolean {
 	const normalize = (value: string) => value.trim().replace(/^#+/, "").toLowerCase();
@@ -79,23 +184,20 @@ export function ticketsMatch(reported: string, expected: string): boolean {
 }
 
 /**
- * Structural validation of the two known contract shapes. Hand-rolled rather
- * than a JSON Schema engine: the shapes are fixed by this extension, and the
- * error must name the field, not the validator.
+ * Structural validation of the two contract shapes. Hand-rolled rather than
+ * driven by a JSON Schema engine: the shapes are fixed by this package, and the
+ * error must name the field rather than the validator.
  *
- * `expectedTicket` closes the loop between the dispatch and the report: without
- * it, a contract that answers a different ticket validates clean.
+ * `expectedTicket` closes the loop between the dispatch and the report. Without
+ * it, a contract answering a different ticket validates clean and the
+ * orchestrator closes the wrong one.
  */
-export function validateContract(taskKind: TaskKind, value: unknown, expectedTicket?: string): ContractCheck {
+export function validateContract(role: FleetRole, value: unknown, expectedTicket?: string): ContractCheck {
 	const root = checkObject(value, "result");
 	if (typeof root === "string") return { ok: false, error: root };
 
-	if (taskKind === "implement") {
-		const error = firstError(
-			checkString(root.ticket, "result.ticket"),
-			checkString(root.status, "result.status"),
-			checkString(root.branch, "result.branch"),
-		);
+	if (role === "implement") {
+		const error = firstError(checkString(root.ticket, "result.ticket"), checkString(root.status, "result.status"), checkString(root.branch, "result.branch"));
 		if (error) return { ok: false, error };
 		if (expectedTicket !== undefined && !ticketsMatch(String(root.ticket), expectedTicket)) {
 			return { ok: false, error: `result.ticket: "${String(root.ticket)}" is not the ticket this job was dispatched for ("${expectedTicket}")` };
@@ -107,7 +209,7 @@ export function validateContract(taskKind: TaskKind, value: unknown, expectedTic
 		if (typeof commits === "string") return { ok: false, error: commits };
 		// An implement job that claims "implemented" with zero commits is not
 		// implemented: the contract must name the work, or the status must say
-		// blocked/failed.
+		// blocked or failed.
 		if (root.status === "implemented" && commits.length === 0) {
 			return { ok: false, error: "result.commits: status implemented requires at least one commit; report status blocked or failed if nothing landed" };
 		}
@@ -119,11 +221,7 @@ export function validateContract(taskKind: TaskKind, value: unknown, expectedTic
 		}
 		const tests = checkObject(root.tests, "result.tests");
 		if (typeof tests === "string") return { ok: false, error: tests };
-		const testsError = firstError(
-			checkString(tests.command, "result.tests.command"),
-			checkNumber(tests.passed, "result.tests.passed"),
-			checkNumber(tests.failed, "result.tests.failed"),
-		);
+		const testsError = firstError(checkString(tests.command, "result.tests.command"), checkNumber(tests.passed, "result.tests.passed"), checkNumber(tests.failed, "result.tests.failed"));
 		if (testsError) return { ok: false, error: testsError };
 		return { ok: true };
 	}
@@ -157,6 +255,9 @@ export function validateContract(taskKind: TaskKind, value: unknown, expectedTic
 	return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// Executor output
+
 interface ClaudeJson {
 	structured_output?: unknown;
 	is_error?: boolean;
@@ -168,10 +269,11 @@ interface ClaudeJson {
 /**
  * The reason claude gives for a run that produced no contract.
  *
- * A quota or authentication failure exits 1 with an empty stderr.log and puts
- * the cause in the stdout envelope. Without this the harvest points the reader
- * at a file that holds nothing. Returns undefined when the stdout is not a
- * claude envelope or carries no error signal.
+ * A quota or authentication failure puts the cause in the stdout envelope while
+ * stderr stays empty, so a report that points at stderr.log points at nothing.
+ * Returns undefined when the stdout is not a claude envelope or carries no
+ * error signal. The envelope's cost fields are deliberately not read: executor
+ * spend is the executor's own account.
  */
 export function claudeFailureNote(text: string): string | undefined {
 	const trimmed = text.trim();
@@ -188,7 +290,14 @@ export function claudeFailureNote(text: string): string | undefined {
 	return parsed.api_error_status == null ? detail : `${detail} (api_error_status=${parsed.api_error_status})`;
 }
 
-/** Pull the contract out of `claude -p --output-format json` stdout. */
+/**
+ * Read a contract out of one-shot claude stdout, when a delivery wrote no
+ * result file.
+ *
+ * A detached `claude -p --output-format json` run carries the contract in its
+ * stdout envelope rather than on disk. Reading the file first would settle every
+ * such run as contract_failed before its output was ever looked at.
+ */
 export function parseClaudeStdout(text: string): { structured?: unknown; error?: string } {
 	let parsed: ClaudeJson;
 	try {
@@ -197,8 +306,6 @@ export function parseClaudeStdout(text: string): { structured?: unknown; error?:
 		return { error: `claude stdout was not JSON: ${error instanceof Error ? error.message : String(error)}` };
 	}
 	if (parsed.structured_output === undefined) {
-		// Prefer the executor's own reason: "no structured_output" is a symptom
-		// when the run died on quota, auth, or a refused tool permission.
 		return { error: claudeFailureNote(text) ?? "claude stdout had no structured_output field (is --json-schema supported by this version?)" };
 	}
 	return { structured: parsed.structured_output };

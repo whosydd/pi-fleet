@@ -1,52 +1,82 @@
 /**
- * Dispatch preflight that needs the real disk.
+ * The one thing this package writes into a project before a job starts: the
+ * project has to ignore the fleet's run directory.
  *
- * `plan.ts` judges the parameters and stays pure; `index.ts` keeps the checks
- * that only reject (worktree exists, is a git checkout). This module holds the
- * one check that *fixes* something before a process exists: the worktree's own
- * `.gitignore` must already cover the fleet state dir.
+ * Why it matters: the run directory holds briefs, logs, and a contract, and it
+ * sits inside the checkout the orchestrator runs from. Untracked, it appears in
+ * `git status` — and a live codex run once committed fleet artifacts alongside
+ * the ticket's work. The run directory is a fleet artifact, not the project's,
+ * so the project must not see it.
  *
- * Why it matters: a state dir that lives inside the worktree — because
- * `PI_FLEET_STATE_DIR` points there, or because the orchestrator runs from that
- * worktree — puts every run dir under the executor's own git status. Untracked
- * fleet artifacts there invite an executor to commit them alongside the
- * ticket's work, which is what a live codex run did before this check existed.
- * When the state dir resolves outside the worktree, this module changes nothing.
+ * The pure half is separated because the rule that matters is not "append a
+ * line" but "do not append it twice": a second dispatch into the same project
+ * must leave a `.gitignore` it already fixed exactly as it found it.
  */
 
-import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import { gitignoreLine, linkIsIgnored } from "./plan.ts";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 
-export interface GitignoreFix {
-	/** The line appended to the worktree `.gitignore`, when it needed one. */
+/**
+ * The line a `.gitignore` needs so the fleet's state is invisible to the
+ * project's own `git status`.
+ *
+ * Returns undefined when the file already covers the entry, so a caller can tell
+ * "nothing to do" from "wrote something" and report it to the user.
+ *
+ * Matching is exact on purpose. A pattern such as `.pi` would also cover the
+ * project's committed `.pi/settings.json`, and a pattern such as `fleet` would
+ * cover an unrelated directory of that name; the fleet adds the narrowest line
+ * that works rather than the shortest.
+ */
+export function gitignoreLine(content: string, entry: string): string | undefined {
+	const wanted = entry.trim().replace(/\/+$/, "");
+	if (!wanted) return undefined;
+	const covered = content.split(/\r?\n/).some((line) => {
+		const text = line.trim();
+		return text === wanted || text === `${wanted}/`;
+	});
+	return covered ? undefined : `${wanted}/`;
+}
+
+/**
+ * Which path inside the project the fleet owns.
+ *
+ * The default layout puts runs under `.pi/fleet/runs`, and the fleet owns
+ * `.pi/fleet` rather than only `runs`: a later release may keep other state
+ * beside the runs, and a project should not have to learn a new line for it.
+ * A configured runs directory elsewhere is ignored as the directory it is.
+ */
+export function ignoreTarget(cwd: string, runsDir: string): string | undefined {
+	const rel = relative(cwd, runsDir);
+	// An absolute runs dir outside the project is not this project's gitignore
+	// business: its `git status` cannot show those files.
+	if (rel === "" || rel === "." || rel.startsWith(`..${sep}`) || rel === ".." || rel.startsWith("/")) return undefined;
+	const segments = rel.split(sep);
+	if (segments.length >= 3 && segments[0] === ".pi" && segments[1] === "fleet") return [".pi", "fleet"].join("/");
+	return segments.join("/");
+}
+
+export interface IgnoreFix {
+	/** The line appended to the project's `.gitignore`, when it needed one. */
 	appended?: string;
-	/** Why the file could not be fixed. A preflight fix never blocks a dispatch. */
+	/** Why the file could not be fixed. This never blocks a dispatch. */
 	error?: string;
 }
 
 /**
- * Make the worktree ignore its fleet state dir, creating `.gitignore` when the
- * checkout has none. Idempotent: a second call finds the entry and writes
- * nothing.
+ * Make the project ignore the fleet's run directory.
  *
- * The state dir is matched by basename, so the entry works wherever the run
- * dirs land. A `PI_FLEET_STATE_DIR` that resolves outside the worktree is not
- * the executor's problem — its git status cannot show those files, so an entry
- * would only dirty the checkout for nothing.
+ * Housekeeping, so any failure degrades to a note rather than stopping a job:
+ * a run directory an executor might commit is bad, and a dispatch that never
+ * started is worse.
  */
-export function ensureStateDirIgnored(worktree: string, stateDir: string): GitignoreFix {
-	const root = resolve(worktree);
-	const dir = resolve(root, stateDir);
-	if (!dir.startsWith(`${root}/`)) return {};
-	const name = basename(dir);
-	// basename("/") is empty: a degenerate state dir has no name to ignore.
-	if (!name) return {};
-
-	const path = join(root, ".gitignore");
+export function ensureRunsDirIgnored(cwd: string, runsDir: string, ignoreName = ".gitignore"): IgnoreFix {
+	const entry = ignoreTarget(cwd, runsDir);
+	if (!entry) return {};
+	const path = join(cwd, ignoreName);
 	try {
 		const content = existsSync(path) ? readFileSync(path, "utf8") : "";
-		const line = gitignoreLine(content, name);
+		const line = gitignoreLine(content, entry);
 		if (!line) return {};
 		const separator = content === "" || content.endsWith("\n") ? "" : "\n";
 		appendFileSync(path, `${separator}${line}\n`, "utf8");
@@ -54,48 +84,4 @@ export function ensureStateDirIgnored(worktree: string, stateDir: string): Gitig
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
 	}
-}
-
-/** What the executor will find when it tries to run the project's checks. */
-export type DepsState =
-	/** No package.json: this project's checks are not Node's business. */
-	| "not-node"
-	| { state: "ready" }
-	| { state: "missing"; hint: string }
-	| { state: "untracked-link"; hint: string };
-
-/**
- * Inspect a worktree's Node dependencies before dispatching into it.
- *
- * A worktree carries no `node_modules`, so an executor told to run
- * `npm run check` fails on the environment and can burn a round discovering it.
- * This reports the situation as a note; it never blocks a dispatch and never
- * edits the project's `.gitignore`. Symlinking the parent checkout's
- * `node_modules` is the usual fix, and it is the orchestrator's call — a
- * dependency directory is the project's policy, unlike the fleet state dir, which
- * this module does write.
- */
-export function inspectNodeDeps(worktree: string): DepsState {
-	if (!existsSync(join(worktree, "package.json"))) return "not-node";
-	const modules = join(worktree, "node_modules");
-	if (!existsSync(modules)) {
-		return { state: "missing", hint: "no node_modules here: install them or symlink the main checkout's before the executor runs the project's checks" };
-	}
-	let isLink = false;
-	try {
-		isLink = lstatSync(modules).isSymbolicLink();
-	} catch {
-		isLink = false;
-	}
-	if (!isLink) return { state: "ready" };
-	// A link is not covered by a `node_modules/` pattern, so it shows up as
-	// untracked work the executor may commit with the ticket.
-	let content = "";
-	try {
-		content = readFileSync(join(worktree, ".gitignore"), "utf8");
-	} catch {
-		content = "";
-	}
-	if (linkIsIgnored(content, "node_modules")) return { state: "ready" };
-	return { state: "untracked-link", hint: "node_modules is a symlink and `node_modules/` in .gitignore does not cover a link: git status will show it as untracked, so expect it in the harvest diff or ignore the bare name" };
 }

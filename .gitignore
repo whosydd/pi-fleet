@@ -1,5 +1,12 @@
 node_modules
 *.log
 .DS_Store
-.fleet/
+
+# pi's own project directory. The settings file is committed; the upstream clone,
+# pi's npm install, and the fleet's run directories are local state.
+.pi/git/
+.pi/npm/
+.pi/fleet/
+
+# A pi session log, when pi is run from this directory.
 session.jsonl

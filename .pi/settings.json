@@ -1,0 +1,25 @@
+{
+  "packages": [
+    {
+      "source": "https://github.com/mattpocock/skills.git",
+      "extensions": [],
+      "skills": [
+        "skills/productivity/grill-me",
+        "skills/productivity/grilling",
+        "skills/productivity/wait-what",
+        "skills/productivity/to-questionnaire",
+        "skills/engineering/grill-with-docs",
+        "skills/engineering/to-spec",
+        "skills/engineering/to-tickets",
+        "skills/engineering/triage",
+        "skills/engineering/domain-modeling",
+        "skills/engineering/setup-matt-pocock-skills"
+      ],
+      "prompts": [],
+      "themes": []
+    },
+    {
+      "source": "/Users/gy/Code/pi/packages/pi-fleet"
+    }
+  ]
+}

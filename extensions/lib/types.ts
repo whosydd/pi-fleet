@@ -1,134 +1,139 @@
 /**
- * Shared types for pi-fleet.
+ * Shared types and settings for pi-fleet.
  *
- * A fleet job is one one-shot executor process: a `codex exec` or `claude -p`
- * run that starts in a worktree, follows a brief, and must end with a JSON
- * contract on disk. The orchestrating model never parses terminal text; it
- * reads the contract the supervisor validated.
+ * A fleet job is one ticket handed to one executor: a dispatcher created a
+ * worktree and a Herdr pane, started the executor's own TUI in it, and told it
+ * to read a brief and write a contract. The executor owns its process; pi owns
+ * nothing but the run directory and the pane handle.
+ *
+ * Because Herdr owns the process, a job's liveness is a question for Herdr, not
+ * for a pid table. Nothing here is a timer or a child handle.
  */
+
+import { resolve } from "node:path";
 
 export type ExecutorKind = "codex" | "claude";
 
-export type TaskKind = "implement" | "review";
+/** One ticket is implemented, then reviewed by the other harness. Never both by one. */
+export type FleetRole = "implement" | "review";
 
 /**
- * Lifecycle of one dispatch. `complete` means the process exited zero and the
- * contract file validated; a zero exit with a broken contract is
- * `contract_failed`, not `complete`.
+ * `dispatched` means the agent was started and told to work. It is the only
+ * pre-settlement state: whether the work landed is the contract's answer, and
+ * the contract is read at harvest time.
  */
-export type JobState = "running" | "complete" | "contract_failed" | "failed" | "timeout" | "rejected";
-
-export interface JobPaths {
-	promptPath: string;
-	schemaPath: string;
-	resultPath: string;
-	stdoutPath: string;
-	stderrPath: string;
-	metaPath: string;
-	/** Final exit code, written by the spawn-mode exit handler. */
-	exitCodePath: string;
-}
+export type JobState = "dispatched" | "complete" | "contract_failed" | "failed";
 
 export interface PaneTargets {
 	workspaceId: string;
-	/** The tab this extension created for the job; FleetCleanup may close it. */
+	/** The tab this package created for the ticket; FleetCleanup may close it. */
 	tabId: string;
 	paneId: string;
-	label: string;
+	/** The Herdr agent name, unique per job. */
+	agentName: string;
 }
 
 export interface JobMeta {
+	/**
+	 * The shape of this record.
+	 *
+	 * Bumped when a field changes meaning. The run directory is the source of
+	 * truth, which means an older release's run directories sit next to this one's
+	 * and must be told apart: a record from a previous shape has no `role`, so
+	 * reading it as a job reports `undefined` as a harness, an already-settled job
+	 * as still running, and a pane Herdr closed days ago as still open. A record
+	 * this package cannot read is not a job it may judge.
+	 */
+	schemaVersion: number;
 	id: string;
+	/** The ticket id, as the tracker file names it: "03", "12". */
 	ticket: string;
-	worktree: string;
+	/** Absolute path of the ticket file this job was dispatched for. */
+	ticketPath: string;
+	role: FleetRole;
 	executor: ExecutorKind;
-	taskKind: TaskKind;
-	model?: string;
-	fixRound: number;
-	/** Fixed point the review kind reviews against; recorded for the ledger. */
+	worktree: string;
+	/** The fixed point a review diffs against. Absent for an implement job. */
 	base?: string;
-	skillPointer?: string;
-	command: string[];
-	paths: JobPaths;
+	fixRound: number;
+	model?: string;
+	runDir: string;
+	briefPath: string;
+	taskPath: string;
+	schemaPath: string;
+	resultPath: string;
+	/** The job's own meta file, so a report can point at where the job lives. */
+	metaPath: string;
 	startedAt: number;
-	timeoutMs: number;
-	state: JobState;
-	pid?: number;
-	finishedAt?: number;
-	exitCode?: number | null;
+	pane?: PaneTargets;
+	/** When FleetCleanup closed the ticket's tab; absent while it stays open. */
+	paneClosedAt?: number;
+	/** The last Herdr lifecycle state a harvest observed. Records waiting-for-a-human; never decides success. */
+	agentStatus?: string;
+	/** First time this job was seen idle with no contract; cleared when the agent works again. */
+	idleSince?: number;
 	contractOk?: boolean;
 	contractError?: string;
-	briefChars?: number;
-	/** Pre-dispatch Jev gate: the three brief-readiness nouls and the outcome. */
-	gate?: GateRecord;
-	/** Post-harvest Jev triage of review findings (review jobs only). */
-	triage?: TriageRecord[];
-	/** Set after the first harvest reported this job as settled to the model. */
-	harvestReported?: boolean;
-	/** How the process started: pi's own child, or a Herdr-managed interactive agent. */
-	runner?: "spawn" | "agent";
-	/** Herdr locations for an interactive job. */
-	pane?: PaneTargets;
-	/** The herdr agent name for an interactive job. */
-	agentName?: string;
-	/** Last agent lifecycle state a harvest observed. Records waiting-for-a-human; never decides success. */
-	agentStatus?: string;
-	/** First time this job was seen idle without a contract; cleared when the agent works again. */
-	idleSince?: number;
-	/** When FleetCleanup closed the pane's tab; absent while it stays open. */
-	paneClosedAt?: number;
-	/** Why an interactive dispatch fell back to a detached spawn, if it did. */
-	paneFallback?: string;
-}
-
-export interface GateRecord {
-	entryPoints: number;
-	acceptance: number;
-	scopeBoundary: number;
-	outcome: "pass" | "warn";
-	/** What the gate's classifier call cost this session's own account (not the executor's). */
-	usage?: { tokens: number; cost: number };
-}
-
-export interface TriageRecord {
-	index: number;
-	axis: "standards" | "spec";
-	label: string;
-	choice: string;
-	confidence: number;
-	uncertain: boolean;
+	/** Set when a harvest first reported this job to the model. Later harvests reuse it. */
+	harvestedAt?: number;
 }
 
 export interface FleetSettings {
-	/** Absolute run-dir root: a relative one would resolve against the executor's cwd (the worktree) instead of the session's. */
-	stateDir: string;
-	maxConcurrent: number;
-	defaultTimeoutMs: number;
+	/** Absolute run-directory root, under pi's own project directory. */
+	runsDir: string;
+	/** Fix rounds past this cap are refused in code, never left to the model's discretion. */
 	maxFixRound: number;
+	/** How long to wait for an executor TUI to come up before giving up on the pane. */
+	agentStartMs: number;
+	/** How long an agent may sit idle with no contract before the job is reported as failed. */
+	idleGraceMs: number;
+	/** Block git stash, git commit --amend, and force push (PI_FLEET_GIT_GUARD=off disables). */
+	gitGuard: boolean;
 	codexBin: string;
 	claudeBin: string;
-	/** Block git stash, git commit --amend, and force push in this session's bash calls (PI_FLEET_GIT_GUARD=off disables). */
-	gitGuard: boolean;
-	/** Run executors as interactive Herdr agents: auto = when this session sits in Herdr (HERDR_ENV=1). */
-	paneMode: "auto" | "on" | "off";
 	herdrBin: string;
-	/** How long to wait for an executor TUI to come up before degrading to a spawn. */
-	agentStartMs: number;
-	/** How long an interactive agent may sit idle without a contract before the job is reported as failed. */
-	idleGraceMs: number;
-	/** Run the ticket's review loop without a model turn (PI_FLEET_LOOP=off disables). */
-	loop: boolean;
-	/** Ping a human when an executor finishes (PI_FLEET_NOTIFY=off disables). */
-	notify: boolean;
 }
 
+function parsePositive(value: string | undefined, fallback: number): number {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+/**
+ * Read settings once at load. `cwd` is a parameter rather than a hidden read so
+ * tests can pin the resolution. The run root is absolute because the
+ * orchestrator writes it and the executor reads paths out of the brief.
+ */
+export function readSettings(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): FleetSettings {
+	return {
+		// resolve() rather than string joining: the orchestrator's cwd and the
+		// executor's worktree cwd are different roots, and a relative run dir lands
+		// on no file when the two disagree.
+		//
+		// The default lives under `.pi/`, which is pi's own project directory, rather
+		// than as a top-level `.fleet/` beside the source. What pi keeps for itself
+		// belongs in pi's directory.
+		runsDir: resolve(cwd, env.PI_FLEET_RUNS_DIR || ".pi/fleet/runs"),
+		maxFixRound: parsePositive(env.PI_FLEET_MAX_FIX_ROUND, 2),
+		agentStartMs: parsePositive(env.PI_FLEET_AGENT_START_MS, 90_000),
+		idleGraceMs: parsePositive(env.PI_FLEET_IDLE_GRACE_MS, 120_000),
+		gitGuard: (env.PI_FLEET_GIT_GUARD || "on").toLowerCase() !== "off",
+		codexBin: env.PI_FLEET_CODEX_BIN || "codex",
+		claudeBin: env.PI_FLEET_CLAUDE_BIN || "claude",
+		herdrBin: env.PI_FLEET_HERDR_BIN || "herdr",
+	};
+}
+
+/** The record shape this release writes and reads. */
+export const JOB_SCHEMA_VERSION = 1;
+
 export const EXECUTOR_KINDS: readonly ExecutorKind[] = ["codex", "claude"];
-export const TASK_KINDS: readonly TaskKind[] = ["implement", "review"];
+export const FLEET_ROLES: readonly FleetRole[] = ["implement", "review"];
 
 export function isExecutorKind(value: string): value is ExecutorKind {
 	return (EXECUTOR_KINDS as readonly string[]).includes(value);
 }
 
-export function isTaskKind(value: string): value is TaskKind {
-	return (TASK_KINDS as readonly string[]).includes(value);
+export function isFleetRole(value: string): value is FleetRole {
+	return (FLEET_ROLES as readonly string[]).includes(value);
 }

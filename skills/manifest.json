@@ -1,0 +1,52 @@
+{
+	"upstream": {
+		"repository": "https://github.com/mattpocock/skills.git",
+		"ref": "main"
+	},
+	"$planning": "Not shipped by this package. `npm run install-planning` installs the upstream repository into a project with a settings filter built from this list, so the planning skills track upstream instead of a pinned copy. This list is the single source for that filter.",
+	"planning": [
+		"productivity/grill-me",
+		"productivity/grilling",
+		"productivity/wait-what",
+		"productivity/to-questionnaire",
+		"engineering/grill-with-docs",
+		"engineering/to-spec",
+		"engineering/to-tickets",
+		"engineering/triage",
+		"engineering/domain-modeling",
+		"engineering/setup-matt-pocock-skills"
+	],
+	"$execution": "Not shipped either. The executors run under Codex and Claude, both of which install these upstream skills themselves, and the task text names them instead of handing over a path: shipping a second copy made the executor load two revisions of one skill at once. Every name here is a name `ROLE_SKILLS` in extensions/lib/brief.ts actually writes.",
+	"execution": [
+		"engineering/tdd",
+		"engineering/code-review"
+	],
+	"excluded": {
+		"engineering/implement": "Its six instructions are already covered: the brief copies the ticket, the contract forces real test numbers, and the task text asks for a commit. The sixth invokes the upstream review skill inside the run that wrote the code, which is what the cross-harness review replaces.",
+		"engineering/ask-matt": "A router into the execution set. Pi refuses the execution set, so the router would point at skills pi does not have.",
+		"engineering/implement-spec": "Runs its own fleet: implementer subagents, worktrees, and a frontier. Two orchestrators on one repo fight over the same branches.",
+		"engineering/wayfinder": "Its ticket types invoke research and prototype, which are execution skills. Revisit once the decision-ticket flow is wanted.",
+		"productivity/handoff": "Writes a session handoff document. Pi's own session log already carries this.",
+		"productivity/teach": "Teaching prose. No fleet role.",
+		"productivity/writing-for-agents": "Writing guidance for agent-facing text. No fleet role.",
+		"in-progress/chief-of-staff": "Needs a scheduler primitive pi does not have.",
+		"in-progress/claude-handoff": "Depends on claude --bg.",
+		"in-progress/loop-me": "Overlaps the fleet skill's own loop.",
+		"in-progress/setup-ts-deep-modules": "Project scaffold. The executor installs it when a ticket calls for it.",
+		"in-progress/writing-beats": "Writing prose. No fleet role.",
+		"in-progress/writing-fragments": "Writing prose. No fleet role.",
+		"in-progress/writing-shape": "Writing prose. No fleet role.",
+		"misc/git-guardrails-claude-code": "Installs a Claude Code hook. This package carries its own guard, which also covers stash and amend.",
+		"misc/migrate-to-shoehorn": "One-off codemod. The executor runs it from a ticket.",
+		"misc/scaffold-exercises": "Course-authoring scaffold. No fleet role.",
+		"misc/setup-pre-commit": "Project scaffold. The executor installs it when a ticket calls for it.",
+		"engineering/codebase-design": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it.",
+		"engineering/diagnosing-bugs": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it.",
+		"engineering/improve-codebase-architecture": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it.",
+		"engineering/pr": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it.",
+		"engineering/prototype": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it.",
+		"engineering/research": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it.",
+		"engineering/retro": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it.",
+		"engineering/wizard": "The executor's own install provides it, and no role names it: the task text names only the skills a role uses. Add it to ROLE_SKILLS in extensions/lib/brief.ts to have the fleet ask for it."
+	}
+}

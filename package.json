@@ -1,7 +1,7 @@
 {
 	"name": "@whosydd/pi-fleet",
 	"version": "0.1.0",
-	"description": "Fleet orchestration for pi: dispatch one-shot Codex/Claude executors, enforce the result contract, and track the ticket frontier.",
+	"description": "Fleet orchestration for pi: plan with the bundled skills, then dispatch one ticket at a time to a Codex or Claude executor in a Herdr pane and judge the result contract.",
 	"type": "module",
 	"license": "MIT",
 	"author": "whosydd",
@@ -17,18 +17,24 @@
 		"fleet",
 		"orchestration",
 		"codex",
-		"claude"
+		"claude",
+		"herdr"
 	],
 	"pi": {
 		"extensions": [
 			"./extensions/index.ts"
+		],
+		"skills": [
+			"./skills/fleet"
 		]
 	},
 	"scripts": {
+		"install-planning": "node scripts/install-planning.mjs",
+		"check-planning": "node scripts/install-planning.mjs --check",
 		"test": "node --test test/*.test.ts",
 		"typecheck": "tsc --noEmit",
 		"smoke": "node smoke/load.ts",
-		"check": "npm run typecheck && npm run test && npm run smoke"
+		"check": "npm run typecheck && npm run test && npm run smoke && npm run check-planning"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": ">=1.0.0",

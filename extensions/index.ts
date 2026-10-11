@@ -1,137 +1,122 @@
 /**
- * pi-fleet — fleet orchestration for pi.
+ * pi-fleet — plan with the bundled skills, then hand one ticket at a time to an
+ * executor and judge what it produced.
  *
- * Dispatch one-shot executors (`codex exec`, `claude -p`) against tickets in
- * git worktrees, enforce the result contract, and recompute the frontier.
- * The division of labour this extension enforces:
+ * The division of labour this package enforces:
  *
- *   - The orchestrating model decides WHAT to dispatch and writes the brief.
- *   - The executor process does the ticket's work and stops at a commit.
- *   - This extension owns the mechanical protocol: spawn, timeout, contract
- *     validation, fix-round caps. It never decides whether a
- *     ticket is truly done — closing tickets stays with the model.
+ *   - The orchestrating model decides what to dispatch, writes nothing the
+ *     executor reads except through this tool, and closes tickets.
+ *   - The executor implements or reviews exactly one ticket, in its own
+ *     worktree, in its own Herdr pane, with its own tools and its own spend.
+ *   - This extension owns the mechanical protocol: the ticket claim, the run
+ *     directory, the pane, the task text, and the contract check. A zero exit
+ *     with a broken contract is `contract_failed`, never a quiet completion.
  *
- * A dispatch is detached: it returns a job id and the turn continues. Harvest
- * happens on a later turn (FleetHarvest), usually after the user pings or the
- * model checks back. Jobs survive the session: state lives on disk under
- * PI_FLEET_STATE_DIR (default .fleet, resolved to an absolute path at load so
- * the executor's worktree cwd never resolves a run-dir path against itself).
+ * The two skill sets ship in this package and are split on purpose. `planning`
+ * is declared in the package manifest, so pi loads it. `execution` is not
+ * declared, so pi never sees it; the extension hands an executor its absolute
+ * path. A harness that can load `implement` will implement instead of
+ * dispatching, so the boundary is enforced by what is loadable rather than by a
+ * request to behave.
  *
- * Jev judgments (degradable, PI_FLEET_JUDGMENTS=off disables): the
- * pre-dispatch gate turns brief readiness into three thresholded nouls, and
- * the review triage turns review findings into blocker/style/ignore choices.
- * Both are advisory inputs to the model, never a replacement for its
- * judgment, and a failed judgment channel must never block a dispatch.
- *
- * Configuration (environment, read once at load — reload to change):
- *   PI_FLEET_STATE_DIR         run-dir root (default: .fleet, made absolute)
- *   PI_FLEET_MAX_CONCURRENCY   concurrent executors (default: 4)
- *   PI_FLEET_TIMEOUT_MS        default wall-clock per job (default: 1800000)
- *   PI_FLEET_MAX_FIX_ROUND     fix-round cap before escalation (default: 2)
- *   PI_FLEET_CODEX_BIN         codex binary (default: codex)
- *   PI_FLEET_CLAUDE_BIN        claude binary (default: claude)
- *   PI_FLEET_JUDGMENTS         on (default) | off — Jev gate and triage
- *   PI_FLEET_JUDGE_PROVIDER    classifier provider (default: typesafe)
- *   PI_FLEET_JUDGE_ID          classifier id (default: jev-latest)
- *   PI_FLEET_GIT_GUARD         on (default) | off — block git stash, commit
- *                              --amend, and force push in bash calls
- *   PI_FLEET_PANES             auto (default) | on | off — run executors in
- *                              Herdr panes; auto means HERDR_ENV=1 only
- *   PI_FLEET_HERDR_BIN         herdr binary (default: herdr)
- *   PI_FLEET_NOTIFY            on (default) | off — ping a human when an
- *                              executor finishes
- *   PI_FLEET_GATE_FLOOR        noul hard floor, refuse below (default: 0.7)
- *   PI_FLEET_GATE_WARN         noul warn line (default: 0.85)
- *   PI_FLEET_TRIAGE_CONFIDENCE triage confidence floor (default: 0.8)
+ * Configuration (environment, read once at load):
+ *   PI_FLEET_RUNS_DIR        run-directory root (default: .pi/fleet/runs, made absolute)
+ *   PI_FLEET_MAX_FIX_ROUND   fix rounds before the dispatch is refused (default: 2)
+ *   PI_FLEET_AGENT_START_MS  how long Herdr waits for an executor TUI (default: 90000)
+ *   PI_FLEET_IDLE_GRACE_MS   idle-without-contract grace before failure (default: 120000)
+ *   PI_FLEET_GIT_GUARD       on (default) | off — block git stash, commit --amend, force push
+ *   PI_FLEET_CODEX_BIN       codex binary (default: codex)
+ *   PI_FLEET_CLAUDE_BIN      claude binary (default: claude)
+ *   PI_FLEET_HERDR_BIN       herdr binary (default: herdr)
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-	buildGateContext,
-	buildTriageContext,
-	classifyViaRegistry,
-	interpretGate,
-	interpretTriage,
-	type JudgmentUsage,
-	summarizeTriage,
-	uncertainIndices,
-	readJudgmentSettings,
-	type ClassifyRegistry,
-	type TriageFinding,
-	type TriageVerdict,
-} from "./lib/judgments.ts";
 import { findGitHazard } from "./lib/gitguard.ts";
-import { closableTabs, isAgentWaiting } from "./lib/panes.ts";
-import { dispatchedEntry, harvestedEntry } from "./lib/ledger.ts";
-import { reportFrontier, type Ticket } from "./lib/frontier.ts";
-import { fixBriefFor, nextStep, reviewBriefFor, type ContractSummary } from "./lib/loop.ts";
-import { planDispatch, readSettings, type DispatchParams } from "./lib/plan.ts";
-import { ensureStateDirIgnored, inspectNodeDeps } from "./lib/preflight.ts";
-import { Supervisor, type HarvestOutcome } from "./lib/supervise.ts";
-import { isExecutorKind, isTaskKind, type ExecutorKind, type JobMeta } from "./lib/types.ts";
-const DISPATCH_TOOL_DESCRIPTION = `Dispatch a one-shot executor (codex exec or claude -p) to implement or review one ticket in its own git worktree. Detached: returns a job id immediately; harvest with FleetHarvest on a later turn.
+import { isAgentWaiting } from "./lib/herdr.ts";
+import { ensureRunsDirIgnored } from "./lib/preflight.ts";
+import { Runner } from "./lib/runner.ts";
+import { defaultExecutor } from "./lib/selection.ts";
+import { INSTALL_SCRIPT } from "./lib/skills.ts";
+import { claimTicket, READY, setStatus } from "./lib/tickets.ts";
+import { isExecutorKind, readSettings, type FleetRole, type JobMeta } from "./lib/types.ts";
 
-Rules the tool enforces (it refuses instead of guessing):
-- The brief is what the executor sees. Write it complete: seam list, spec pointer, acceptance criteria. Executors never see this conversation.
-- The Jev gate scores implement briefs on three nouls (entry points, acceptance criteria, scope boundary). Below the floor the dispatch is refused with the missing dimensions named; between floor and warn line it proceeds with a warning. Gate unavailable degrades to a note, never a block.
-- task_kind "review" needs base: the fixed point to diff against. Reviews see committed work only, so commit-before-review is the caller's job (verify with git log <base>..HEAD).
-- fix_round is capped; past the cap the tool refuses and you should escalate to the user.
-- Executors are told to stop at a commit and never close tickets. Closing the ticket and recomputing the frontier is yours, after a contract_complete harvest.
-- Pane mode (PI_FLEET_PANES, default auto: on when pi runs inside Herdr) starts the executor in a Herdr tab so a human can watch it live. The tab stays open after the run: read its output and the file changes there, then close it with FleetCleanup. A dispatch never closes a pane by itself.
+const execFileAsync = promisify(execFile);
 
-Contract: the executor's final output must be JSON. implement jobs report ticket/status/branch/commits/tests; review jobs report per-axis worst issues (standards + spec, never merged). The tool validates it; a zero exit with a broken contract is contract_failed, not complete.`;
+const DISPATCH_DESCRIPTION = `Hand one ticket to one executor and get a job id back. The executor runs in its own git worktree, in a Herdr pane next to you, and writes a contract file when it stops.
 
-const HARVEST_TOOL_DESCRIPTION = `Harvest a dispatched fleet job: checks whether the executor process finished, validates its result contract, and reports the outcome with the run dir for full logs.
+What the tool does for you: claims the ticket (rewrites its Status line to "claimed"), creates the run directory, writes the brief and the JSON schema, opens or reuses the ticket's Herdr tab, starts the executor's own TUI, and delivers the task. What it will not do: create the worktree, pick the executor's tools, set its permissions, or pay its bill.
 
-Outcomes: running (harvest again later), contract_complete (fold the result in and decide: close the ticket? dispatch the next frontier ticket?), contract_failed (read contract_error; fix the brief, not the schema), failed / timeout (the reported error carries the executor's own reason when its output has one; otherwise read the run dir's stdout.log and stderr.log).
+The brief is what the executor sees — it never sees this conversation. Copy the ticket's text in; the ticket file itself stays out of the worktree.
 
-A job you dispatched is not finished until a harvest says contract_complete. Do not close tickets, do not report the spec as done, and do not dispatch dependents before that.
+Rules this tool enforces rather than leaves to you:
+- role "review" needs base: the commit, branch, or tag to diff against. Reviews see committed work only, so commit before dispatching one.
+- A review must run on the harness that did not write the code. Omit executor and the tool picks the other one on its own.
+- fix_round is capped in code. Past the cap the tool refuses; escalate to the user instead of rephrasing the same brief.
+- A ticket is claimable only from status "${"ready-for-agent"}", so two dispatches cannot take the same ticket.
 
-Review jobs get a Jev triage on harvest: each finding is classified blocker/style/ignore. Only blockers should consume a fix round; uncertain verdicts are flagged for you to read yourself. Triage unavailable degrades to a note, never a block.`;
+A dispatch returns immediately: the executor is a Herdr agent, not a child of this turn. Do not report the ticket as done until a FleetHarvest returns contract_complete.`;
 
-const STATUS_TOOL_DESCRIPTION = `List fleet jobs: id, ticket, executor, task kind, state, fix round. Use it to rehydrate after a reload or to pick what to harvest next. Inherited jobs from a dead session show here after loadFromDisk.
+const HARVEST_DESCRIPTION = `Read a dispatched job and judge what it produced. This is the only place a job is decided.
 
-Pass the tracker's tickets (id, status, blockers) and the answer also carries the frontier: which tickets are ready to dispatch, which wait on a blocker, and the graph's structural problems (unknown blocker ids, cycles) as strings. The extension never owns ticket state — it reads the graph you hand it and computes what may start.`;
+Outcomes: running (harvest again later; a job waiting for you at an approval says so), contract_complete (the contract comes back inline), contract_failed (the exact field-level error), failed (the executor produced nothing; its own reason is reported when its output carries one).
+
+Harvesting the same settled job twice is safe: the first harvest reports the job, later ones return the same artifacts without re-judging.
+
+An executor's exit is not evidence. Herdr's idle and done mean "ready for input", not "finished" — a live run was idle mid-task and committed minutes later — so this tool only settles a job on the contract file, and on idleness that persists without one.`;
+
+const STATUS_DESCRIPTION = `List the fleet jobs on disk: id, ticket, role, executor, state, fix round, and which pane tabs are still open. Jobs from earlier sessions appear here, because every job is read from its run directory rather than from this session's memory.
+
+It does not compute a frontier. The tracker's own convention defines one: an issue file under \`.scratch/<feature>/issues/\` that is neither claimed nor done, with every ticket in its "Blocked by" line done, lowest number first. Read the files and pick; this tool only tells you what is already in flight.`;
+
+const CLEANUP_DESCRIPTION = `Close the Herdr tabs that fleet jobs created, once those jobs have settled.
+
+What it closes: only tabs this package created, and only when every job in them has been harvested. Never the worktree, never its Herdr workspace, never a pane you opened yourself. A tab holding an unsettled job is reported as blocked.
+
+The run directory and every log survive cleanup, so a closed tab loses no evidence. Read the pane's output and the file changes first: that is what the pane is for.`;
 
 function textResult<T>(text: string, details: T): { content: { type: "text"; text: string }[]; details: T } {
 	return { content: [{ type: "text", text }], details };
 }
 
+/**
+ * One job as a line of the FleetStatus report. `running` here means "not yet
+ * judged": whether the work landed is the contract's answer, not the agent's.
+ */
 function jobLine(meta: JobMeta): string {
-	const gate = meta.gate ? ` · gate ${meta.gate.outcome}` : "";
-	const pane = meta.pane ? (meta.paneClosedAt === undefined ? ` · pane ${meta.pane.tabId}` : " · pane closed") : "";
-	return `${meta.id} · ${meta.ticket} · ${meta.executor}/${meta.taskKind} · ${meta.state} · fix ${meta.fixRound}${gate}${pane}`;
+	const state = meta.contractOk === undefined ? "running" : meta.contractOk ? "complete" : "contract_failed";
+	const pane = meta.pane ? (meta.paneClosedAt === undefined ? ` · pane ${meta.pane.paneId}` : " · pane closed") : "";
+	const status = meta.agentStatus ? ` · agent ${meta.agentStatus}` : "";
+	const round = meta.fixRound > 0 ? ` · fix ${meta.fixRound}` : "";
+	return `${meta.id} · ${meta.ticket} · ${meta.role}/${meta.executor} · ${state}${round}${pane}${status}`;
+}
+
+/** The run directory a job's meta lives in, for a report that points at the logs. */
+function runDirOf(settings: { runsDir: string }, id: string): string {
+	return `${settings.runsDir.replace(/\/$/, "")}/${id}`;
 }
 
 export default function fleetExtension(pi: ExtensionAPI) {
 	const settings = readSettings();
-	/** The pi tool context, taken from the dispatch tool's own signature. */
-	type ChainCtx = Parameters<typeof dispatchTool.execute>[4];
-	const judgeSettings = readJudgmentSettings();
-	const supervisor = new Supervisor(settings);
+	const runner = new Runner(settings);
 
-	pi.on("session_start", async (_event, ctx) => {
-		const loaded = supervisor.loadFromDisk();
-		if (loaded > 0) {
-			// Stale "running" metas settle on the next harvest; say what exists.
-			ctx.ui.notify(`pi-fleet: rehydrated ${loaded} job(s) from ${settings.stateDir}`, "info");
-		}
-	});
-
-	pi.on("session_shutdown", () => {
-		supervisor.clearTimers();
-		supervisor.persistAll();
-	});
+	// -----------------------------------------------------------------------
+	// Git guard
 
 	/**
-	 * Fleet runs put one repository across several worktrees and point reviews
-	 * and fix rounds at commit shas. Three commands break that guarantee from the
-	 * orchestrator side: refs/stash is shared by every worktree, and an amend or
-	 * a force push invalidates the commit a base already names. Block them in the
-	 * model's bash calls and in the user's `!` commands, and say why.
+	 * Fleet work puts one repository across several worktrees and points reviews
+	 * at commit shas. Three commands break that from the orchestrator's side:
+	 * `refs/stash` is shared by every worktree, and an amend or a force push
+	 * invalidates a commit a review base already names.
+	 *
+	 * The upstream guardrail skill blocks `push`, `reset --hard`, `clean -f` and
+	 * `branch -D`, and only inside Claude Code. It does not block stash or amend,
+	 * which is exactly the accident its own documentation describes, so this
+	 * package keeps its own guard.
 	 */
 	function guardReport(command: string): string | undefined {
 		const hazard = findGitHazard(command);
@@ -142,513 +127,288 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	if (settings.gitGuard) {
 		pi.on("tool_call", async (event) => {
 			if (event.toolName !== "bash") return undefined;
-			const command = String((event.input as { command?: unknown }).command ?? "");
-			const reason = guardReport(command);
-			if (!reason) return undefined;
-			return { block: true, reason };
+			const reason = guardReport(String((event.input as { command?: unknown }).command ?? ""));
+			return reason ? { block: true, reason } : undefined;
 		});
-
 		pi.on("user_bash", async (event) => {
 			const reason = guardReport(event.command);
-			if (!reason) return undefined;
-			return { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } };
+			return reason ? { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } } : undefined;
 		});
 	}
 
-	/**
-	 * Run the Jev gate over a brief. Degrades to undefined on any channel
-	 * failure: an unavailable judgment channel must not block dispatching.
-	 */
-	async function gateBrief(brief: string, registry: ClassifyRegistry): Promise<{ verdict?: ReturnType<typeof interpretGate>; note?: string; usage?: JudgmentUsage }> {
-		if (!judgeSettings.enabled) return {};
-		try {
-			const attempt = await classifyViaRegistry(registry, judgeSettings, buildGateContext(brief));
-			if (!attempt.ok) return { note: `judgment channel unavailable, gate skipped (${attempt.reason})` };
-			return { verdict: interpretGate(attempt.answers, { floor: judgeSettings.gateFloor, warn: judgeSettings.gateWarn }), usage: attempt.usage };
-		} catch (error) {
-			return { note: `judgment channel failed, gate skipped (${error instanceof Error ? error.message : String(error)})` };
-		}
-	}
+	// -----------------------------------------------------------------------
+	// Dispatch
 
 	const dispatchTool = defineTool({
 		name: "FleetDispatch",
 		label: "Fleet Dispatch",
-		description: DISPATCH_TOOL_DESCRIPTION,
-		promptSnippet: "Dispatch one-shot executor agents against tickets in worktrees",
+		description: DISPATCH_DESCRIPTION,
+		promptSnippet: "Hand one ticket to a Codex or Claude executor in its own worktree and pane",
 		promptGuidelines: [
-			"Use FleetDispatch for a ticket that is fully specified and ready to build AFK, or for an independent review of committed work. For work that is still vague, grill first; do not dispatch.",
-			"A dispatch is detached. Keep working or end your turn; the executor is a separate process. Do not report the ticket as done until a FleetHarvest returns contract_complete.",
-			"Fix rounds are capped. When the cap refuses, escalate to the user with the worst finding instead of rephrasing the same brief.",
+			"Dispatch only a ticket whose blockers are done and whose text is complete: what to build, acceptance criteria, what is out of scope. A vague ticket costs a whole executor run.",
+			"After dispatching, end your turn or do other work. The executor runs in a pane; do not poll it. Harvest on a later turn, and only then decide the ticket is done.",
+			"Do not create the worktree here: run `herdr worktree create` first so the worktree arrives with its own workspace and its own pane column.",
 		],
 		parameters: Type.Object({
-			ticket: Type.String({ description: "Ticket id or name from the tracker, e.g. '42' or 'auth-refactor'. Recorded in the job and the contract." }),
-			worktree: Type.String({ description: "Absolute path of the git worktree the executor runs in. Create it yourself (git worktree add) before dispatching." }),
-			executor: Type.String({ description: "Which executor binary runs the job: 'codex' or 'claude'." }),
-			task_kind: Type.Optional(
-				Type.String({ description: "'implement' (default) builds the ticket and commits; 'review' reviews committed work against base and reports two axes." }),
-			),
-			brief: Type.String({ description: "Complete instructions for the executor: what to build or review, seams, spec pointer, acceptance criteria. This is all it sees." }),
-			base: Type.Optional(Type.String({ description: "For task_kind 'review': the fixed point (commit, branch, tag) to diff against. Required for reviews." })),
-			skill_pointer: Type.Optional(Type.String({ description: "Absolute path of a SKILL.md the executor should load and follow, e.g. the tdd skill. Executors cannot auto-load skills." })),
-			model: Type.Optional(Type.String({ description: "Model override passed to the executor CLI. Omit for the executor's default." })),
-			fix_round: Type.Optional(Type.Number({ description: "0 for a first dispatch (default). Increment when re-dispatching after review findings; capped." })),
-			timeout_ms: Type.Optional(Type.Number({ description: "Wall-clock limit for the executor process. Default PI_FLEET_TIMEOUT_MS." })),
-			pane: Type.Optional(Type.Boolean({ description: "Run the executor in a Herdr pane so a human can watch it. Absent follows PI_FLEET_PANES (auto: on inside Herdr). The tab stays open after the run for inspection; FleetCleanup closes it." })),
+			ticket: Type.String({ description: "Absolute path of the ticket file, e.g. /repo/.scratch/login/issues/03-token-refresh.md. Its NN prefix is the ticket id recorded in the contract." }),
+			worktree: Type.String({ description: "Absolute path of an existing git worktree to run in. Create it with `herdr worktree create` before dispatching." }),
+			role: Type.String({ description: '"implement" builds the ticket and commits; "review" reviews committed work against base and reports two axes. A ticket gets both, in that order.' }),
+			executor: Type.Optional(Type.String({ description: 'Which harness runs the job: "codex" or "claude". Omit to let the tool choose — codex for implement, and for review the harness that did not write the code.' })),
+			base: Type.Optional(Type.String({ description: 'For role "review": the commit, branch, or tag to diff against. Required for reviews, and normally the branch the implement job reported in its contract.' })),
+			fix_round: Type.Optional(Type.Number({ description: "0 for a first dispatch (default). Increment when re-dispatching after a review found blockers; capped, and the tool refuses past the cap." })),
+			findings: Type.Optional(Type.Array(Type.String({ description: "One blocker finding, as the review reported it." }))),
+			model: Type.Optional(Type.String({ description: "Model override passed through to the executor CLI. Omit for the executor's own default." })),
 		}),
-		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-			const args = params as DispatchParams;
-			if (args.executor && !isExecutorKind(args.executor)) {
-				return textResult(`executor: unknown kind "${args.executor}", expected codex or claude`, { status: "rejected" });
-			}
-			if (args.task_kind && !isTaskKind(args.task_kind)) {
-				return textResult(`task_kind: unknown kind "${args.task_kind}", expected implement or review`, { status: "rejected" });
-			}
+		execute: async (_toolCallId, params) => {
+			const args = params as { ticket?: string; worktree?: string; role?: string; executor?: string; base?: string; fix_round?: number; findings?: string[]; model?: string };
 
-			// Filesystem preflight: the plan module judges parameters; the tool
-			// judges the machine. A worktree that is not a git checkout is a
-			// rejection, not a spawn that dies in stderr.log (codex requires a
-			// git repository; worktrees carry .git as a file).
-			if (!args.worktree || !args.worktree.startsWith("/")) {
-				return textResult("worktree must be an absolute path to an existing git worktree", { status: "rejected" });
+			const role = args.role?.trim() ?? "";
+			if (role !== "implement" && role !== "review") {
+				return textResult(`role must be "implement" or "review", got ${role === "" ? "nothing" : `"${role}"`}`, { status: "rejected" });
 			}
-			if (!existsSync(args.worktree) || !statSync(args.worktree).isDirectory()) {
-				return textResult(`worktree "${args.worktree}" does not exist or is not a directory. Create it first: git worktree add <path> -b <branch>`, { status: "rejected" });
+			const fleetRole: FleetRole = role;
+			const ticketPath = args.ticket?.trim() ?? "";
+			if (!ticketPath || !ticketPath.startsWith("/")) {
+				return textResult("ticket must be the absolute path of a ticket file", { status: "rejected" });
 			}
-			if (!existsSync(join(args.worktree, ".git"))) {
-				return textResult(`worktree "${args.worktree}" is not a git checkout (no .git). Executors require a git repository.`, { status: "rejected" });
+			if (!existsSync(ticketPath) || statSync(ticketPath).isDirectory()) {
+				return textResult(`no ticket file at ${ticketPath}`, { status: "rejected" });
 			}
-
-			const planned = planDispatch(args, settings, { runningCount: supervisor.runningCount(), herdrEnv: process.env.HERDR_ENV });
-			if (!planned.ok) {
-				return textResult(planned.message, { status: "rejected" });
+			const worktree = args.worktree?.trim() ?? "";
+			if (!worktree || !worktree.startsWith("/")) {
+				return textResult("worktree must be an absolute path", { status: "rejected" });
 			}
-			const plan = planned.plan;
-
-			// Jev gate: three atomic nouls over the brief. Refuse below the
-			// floor with the missing dimensions named; warn between floor and
-			// warn line; degrade silently (with a note) when the channel is out.
-			// A fix round narrows an already-gated brief to named findings, so the
-			// gate would misread it as under-specified; skip it.
-			const gate = plan.fixRound > 0 ? {} : await gateBrief(args.brief, ctx.modelRegistry as unknown as ClassifyRegistry);
-			if (gate.verdict?.outcome === "refuse") {
-				const missing = gate.verdict.missing.map((dimension) => dimension.replace(/_/g, " ")).join(", ");
+			if (!existsSync(worktree) || !statSync(worktree).isDirectory()) {
+				return textResult(`worktree ${worktree} does not exist or is not a directory. Create it first: herdr worktree create`, { status: "rejected" });
+			}
+			if (!existsSync(`${worktree}/.git`)) {
+				return textResult(`worktree ${worktree} is not a git checkout (no .git). An executor requires one.`, { status: "rejected" });
+			}
+			if (fleetRole === "review" && !args.base?.trim()) {
+				return textResult('role "review" requires base: the fixed point to diff against. Use the branch the implement job reported.', { status: "rejected" });
+			}
+			const fixRound = args.fix_round ?? 0;
+			if (!Number.isInteger(fixRound) || fixRound < 0) {
+				return textResult("fix_round must be a non-negative integer", { status: "rejected" });
+			}
+			if (fixRound > settings.maxFixRound) {
 				return textResult(
-					`Dispatch refused: the brief looks under-specified (${missing} below the ${judgeSettings.gateFloor} readiness floor).\n` +
-						`Fix the brief before dispatching: name the entry points or APIs, add checkable acceptance criteria, state what is out of scope.\n` +
-							`Probabilities: ${JSON.stringify(gate.verdict.probabilities)}` + (gate.usage ? `\nGate spend: ${gate.usage.tokens} tokens, $${gate.usage.cost.toFixed(4)} (this session's own account, not the executor's).` : ""),
-					{ status: "rejected", gate: gate.verdict },
+					`fix_round ${fixRound} exceeds the cap of ${settings.maxFixRound}. Escalate to the user with the worst finding instead of dispatching another round: the review-fix loop has to stop somewhere, and this is where.`,
+					{ status: "rejected" },
 				);
 			}
-			const gateRecord = gate.verdict
-				? {
-						entryPoints: gate.verdict.probabilities.entry_points,
-						acceptance: gate.verdict.probabilities.acceptance,
-						scopeBoundary: gate.verdict.probabilities.scope_boundary,
-						outcome: gate.verdict.outcome === "warn" ? ("warn" as const) : ("pass" as const),
-						usage: gate.usage,
-					}
-				: undefined;
-			const warnNote =
-				gate.verdict?.outcome === "warn"
-					? `\nGate warning: weak dimensions (${gate.verdict.weak.map((dimension) => dimension.replace(/_/g, " ")).join(", ")}). The dispatch proceeds; consider strengthening the brief next round.`
-					: "";
-			const channelNote = gate.note ? `\nNote: ${gate.note}.` : "";
-
-			// The worktree must ignore its own fleet state dir before an executor
-			// starts, so run dirs never read as untracked work. Only now: a
-			// dispatch the gate refused must not have touched the checkout. A
-			// preflight fix is housekeeping, so an unwritable .gitignore degrades
-			// to a note instead of blocking the job.
-			const gitignoreFix = ensureStateDirIgnored(args.worktree, settings.stateDir);
-			// Dependencies are reported, never fixed: preparing them is the
-			// orchestrator's call, and a missing node_modules otherwise costs the
-			// executor a round on the environment instead of on the ticket.
-			const deps = inspectNodeDeps(args.worktree);
-			const depsNote = typeof deps === "object" && "hint" in deps ? `\nNote: ${deps.hint}` : "";
-			const gitignoreNote = gitignoreFix.appended
-				? `\nGitignore: appended "${gitignoreFix.appended}" to ${join(args.worktree, ".gitignore")} — that uncommitted line is fleet housekeeping, not the ticket's work; expect it in the harvest diff.`
-				: gitignoreFix.error
-					? `\nNote: could not update the worktree .gitignore (${gitignoreFix.error}); fleet artifacts may show there as untracked files.`
-					: "";
-
-			let meta: JobMeta;
-			// A finished executor must not go quiet. An interactive job pings from the
-			// background `herdr agent wait` this session holds, so the ping arrives when
-			// the agent stops working; a detached spawn pings from its own exit event.
-			// Exactly one channel fires per job.
-			const onSettled = (settled: JobMeta): void => {
-				if (settings.loop) void advanceChain(ctx, settled.id);
-				if (!settings.notify) return;
-				const title = `fleet: ${settled.ticket} finished`;
-				// The two forms report different facts: a spawn leaves an exit code, an
-				// agent leaves a lifecycle state, and neither one proves the contract.
-				const body = settled.runner === "agent" ? `the agent is ${settled.agentStatus ?? "ready"} — harvest to judge the contract` : `exit code ${settled.exitCode ?? "signal"} — harvest to judge the contract`;
-				if (ctx.hasUI) {
-					ctx.ui.notify(`${title}: ${body}`, "info");
-					return;
-				}
-				void supervisor.notify(title, body);
-			};
-			try {
-				meta = await supervisor.dispatch(plan, args.brief, gateRecord, onSettled);
-			} catch (error) {
-				return textResult(`dispatch failed: ${error instanceof Error ? error.message : String(error)}`, { status: "rejected" });
+			if (args.executor !== undefined && !isExecutorKind(args.executor)) {
+				return textResult(`executor must be "codex" or "claude", got "${args.executor}"`, { status: "rejected" });
 			}
-			const entry = dispatchedEntry(meta);
-			pi.appendEntry(entry.customType, entry.data);
-			const skill = plan.skillPointer ? `\nSkill pointer: ${plan.skillPointer}` : "";
-			const paneNote = meta.pane
-				? `\nInteractive pane: ${meta.pane.paneId} (tab ${meta.pane.tabId}, agent ${meta.agentName}). Watch it live, answer it if it waits for you, interrupt it there with Esc. It writes the contract to ${plan.paths.resultPath}. The tab stays open after the run; FleetCleanup closes it.`
-				: meta.paneFallback
-					? `\nInteractive dispatch unavailable, running detached instead: ${meta.paneFallback}`
+
+			const claim = claimTicket(ticketPath);
+			if (!claim.ok || !claim.ticket) return textResult(claim.error ?? `could not claim ${ticketPath}`, { status: "rejected" });
+			const ticket = claim.ticket;
+
+			// The project must ignore the fleet's run directory before it exists, or its
+			// own `git status` shows fleet artifacts as untracked work — and a live run
+			// once committed them alongside the ticket. Housekeeping, so a read-only
+			// `.gitignore` degrades to a note instead of blocking the dispatch.
+			const ignoreFix = ensureRunsDirIgnored(process.cwd(), settings.runsDir);
+			const ignoreNote = ignoreFix.appended
+				? `\nGitignore: appended "${ignoreFix.appended}" to ${join(process.cwd(), ".gitignore")} — fleet run directories are this package's, not the ticket's work.`
+				: ignoreFix.error
+					? `\nNote: could not update ${join(process.cwd(), ".gitignore")} (${ignoreFix.error}); fleet run directories may show there as untracked files.`
 					: "";
+
+			// A review runs on the harness that did not write the code. The tool knows
+			// which one that was, so it decides rather than asking every caller to
+			// remember.
+			const executor = args.executor && isExecutorKind(args.executor) ? args.executor : defaultExecutor(fleetRole, runner.all(), ticket.id);
+
+			const outcome = await runner.dispatch({
+				ticketId: ticket.id,
+				ticketPath,
+				ticketText: readTicketText(ticketPath),
+				worktree,
+				role: fleetRole,
+				executor,
+				base: args.base?.trim() || undefined,
+				fixRound,
+				findings: args.findings,
+				model: args.model?.trim() || undefined,
+			});
+			if (!outcome.ok) {
+				// A claimed ticket with no job would be invisible to the next scan of the
+				// frontier and unbuildable by hand, so a failed dispatch releases it.
+				releaseClaim(ticketPath);
+				return textResult(`dispatch failed, ticket ${ticket.id} released: ${outcome.error}`, { status: "rejected" });
+			}
+			const meta = outcome.meta;
 			return textResult(
-				`Dispatched ${meta.id} (${meta.executor}/${meta.taskKind}) for ticket ${meta.ticket} in ${meta.worktree}.${gateRecord ? `\nGate: ${gateRecord.outcome} (entry ${gateRecord.entryPoints.toFixed(2)}, acceptance ${gateRecord.acceptance.toFixed(2)}, scope ${gateRecord.scopeBoundary.toFixed(2)})` : ""}${warnNote}${channelNote}${paneNote}\nRun dir: ${settings.stateDir}/runs/${meta.id}\nHarvest with FleetHarvest when you check back — the process runs detached and survives this session.${gitignoreNote}${depsNote}${skill}`,
-				{ status: "dispatched", jobId: meta.id, ticket: meta.ticket, runDir: `${settings.stateDir}/runs/${meta.id}`, gate: gateRecord, pane: meta.pane, paneFallback: meta.paneFallback, deps },
+				`Dispatched ${meta.id} — ticket ${meta.ticket} ${meta.role} on ${meta.executor}.${meta.base ? ` Base: ${meta.base}.` : ""}\n` +
+					`Pane: ${meta.pane?.paneId} (tab ${meta.pane?.tabId}, agent ${meta.pane?.agentName}). Watch it there, answer it if it asks you something, interrupt it with Esc.\n` +
+					`Run directory: ${meta.runDir}\n` +
+					`The executor writes its contract to ${meta.resultPath}. FleetHarvest judges it; until then the ticket is not done.${ignoreNote}`,
+				{ status: "dispatched", jobId: meta.id, ticket: meta.ticket, runDir: meta.runDir, role: meta.role, executor: meta.executor, pane: meta.pane },
 			);
 		},
 	});
+
+	// -----------------------------------------------------------------------
+	// Harvest
 
 	const harvestTool = defineTool({
 		name: "FleetHarvest",
 		label: "Fleet Harvest",
-		description: HARVEST_TOOL_DESCRIPTION,
-		promptSnippet: "Collect finished fleet jobs and validate their result contracts",
+		description: HARVEST_DESCRIPTION,
+		promptSnippet: "Read a dispatch's contract and decide whether the work landed",
 		promptGuidelines: [
-			"Harvest every job you dispatched before claiming any delegated work is done. contract_complete is the only success.",
-			"On contract_failed, read the run dir and fix the brief; the schema is fixed by this extension and is not the thing to change.",
-			"On contract_complete for an implement job: verify the branch and commits, close the ticket your tracker's way, then recompute what is ready next.",
+			"Harvest every job you dispatched before saying any delegated work is done. contract_complete is the only success.",
+			"On contract_failed, read the run directory and rewrite the ticket or the brief. Do not change the schema: it is fixed by this package.",
+			"On a review, the two axes are reported separately and must be folded into your report the same way. A finding is only worth a fix round when it blocks merging.",
 		],
 		parameters: Type.Object({
-			job_id: Type.String({ description: 'The job id returned by FleetDispatch, e.g. "job_42_1699999999".' }),
+			job_id: Type.String({ description: "The job id FleetDispatch returned." }),
 		}),
-		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+		execute: async (_toolCallId, params) => {
 			const jobId = String((params as { job_id?: string }).job_id ?? "").trim();
 			if (!jobId) return textResult("job_id is required", { status: "rejected" });
-			if (!supervisor.get(jobId)) {
-				return textResult(`unknown job "${jobId}". FleetStatus lists what this session knows.`, { status: "rejected" });
+			const report = await runner.harvest(jobId);
+			const dir = runDirOf(settings, jobId);
+
+			if (report.kind === "unknown") {
+				return textResult(`${jobId} cannot be harvested: ${report.error}`, { status: "rejected", jobId });
 			}
-			const report = await supervisor.refresh(jobId);
-			const outcome: HarvestOutcome = report.outcome;
-			if (outcome.kind === "running") {
-				const job = supervisor.get(jobId)!;
-				// An interactive agent that reports `blocked` is waiting on a human at an
-				// approval or question. Say so: the run is not slow, it is stalled on you.
-				const waiting = isAgentWaiting(job.agentStatus ?? "") ? ` It waits for you at an approval or question in pane ${job.pane?.paneId ?? "?"} — answer it there, or press Esc.` : "";
-				return textResult(`${jobId} is still running (executor ${job.executor}, started ${Math.round((Date.now() - job.startedAt) / 1000)}s ago). Harvest again later.${waiting}`, {
+			if (report.kind === "running") {
+				const meta = report.meta;
+				const waiting = isAgentWaiting(report.status ?? "") ? ` It waits for you at an approval or question in pane ${meta.pane?.paneId ?? "?"} — answer it there, or press Esc.` : "";
+				return textResult(`${jobId} is still running (agent ${report.status ?? "unknown"}).${waiting} Harvest again later: the executor is a pane, not a child of this turn.`, {
 					status: "running",
-				});
-			}
-			const meta = outcome.meta;
-			// Idempotent harvest: the first settled harvest reports the job to
-			// the model; later harvests return the same artifacts without
-			// re-judging the contract, re-running the triage, or re-writing the
-			// ledger entry.
-			const alreadyReported = meta.harvestReported === true;
-			if (!alreadyReported) {
-				const harvested = harvestedEntry(meta, outcome.kind, outcome.kind === "contract_failed" || outcome.kind === "failed" ? outcome.error : undefined);
-				pi.appendEntry(harvested.customType, harvested.data);
-				meta.harvestReported = true;
-				supervisor.persist(meta);
-			}
-			if (outcome.kind === "contract_failed") {
-				return textResult(`${jobId} finished but violated the contract: ${outcome.error}\nRun dir: ${meta.paths.metaPath.replace(/\/meta\.json$/, "")} (stdout.log, stderr.log, result.json)`, {
-					status: "contract_failed",
 					jobId,
-					error: outcome.error,
+					agentStatus: report.status,
 				});
 			}
-			if (outcome.kind === "failed") {
-				return textResult(`${jobId} failed: ${outcome.error}\nRun dir: ${meta.paths.metaPath.replace(/\/meta\.json$/, "")}`, { status: "failed", jobId });
+
+			// `running`, `complete`, `contract_failed`, and `failed` all carry a readable
+			// meta, so the bookkeeping below is safe; `unknown` returned above.
+			const meta = report.meta;
+			if (meta.harvestedAt === undefined) {
+				meta.harvestedAt = Date.now();
+				// Persist through the runner's writer so the run directory and this
+				// session agree about a settled job.
+				runner.persist(meta);
 			}
 
-			// contract_complete: hand the model the parsed contract, not the file.
-			const { readFileSync } = await import("node:fs");
-			let contract: unknown;
-			try {
-				contract = JSON.parse(readFileSync(meta.paths.resultPath, "utf8"));
-			} catch (error) {
-				return textResult(
-					`${jobId} harvest could not read result.json: ${error instanceof Error ? error.message : String(error)}. Inspect the run dir by hand.`,
-					{ status: "failed", jobId },
-				);
+			if (report.kind === "contract_failed") {
+				return textResult(`${jobId} finished but violated the contract: ${report.error}\nRun directory: ${dir}`, { status: "contract_failed", jobId, error: report.error });
 			}
-			const contractText = JSON.stringify(contract, null, 2);
-
-			// Jev triage for review jobs: one choice per finding. Blockers are
-			// the only findings that should consume fix rounds; uncertain
-			// verdicts are flagged for the model to read itself.
-			const axes = contract as { standards?: unknown; spec?: unknown };
-			let triageNote = "";
-			let triageRecords: JobMeta["triage"];
-			if (meta.triage) {
-				// Cached from a previous harvest: report it again without re-judging.
-				triageRecords = meta.triage;
-				const tally = summarizeTriage(meta.triage);
-				const uncertain = uncertainIndices(meta.triage);
-				triageNote =
-					`\n\nTriage (cached): ${tally.blockers} blocker(s), ${tally.style} style, ${tally.ignore} ignore, ${tally.uncertain} uncertain.` +
-					(uncertain.length > 0 ? ` Read these yourself before acting: ${uncertain.map((index) => `#${index}`).join(", ")}.` : "");
-			} else if (
-				judgeSettings.enabled &&
-				meta.taskKind === "review" &&
-				!meta.triage &&
-				axes.standards &&
-				axes.spec
-			) {
-				const standardsFindings = (axes.standards as { findings?: unknown }).findings as { rule?: string; file?: string; line?: number; quote?: string }[] | undefined;
-				const specFindings = (axes.spec as { findings?: unknown }).findings as { file?: string; line?: number; quote?: string }[] | undefined;
-				const findings: TriageFinding[] = [
-					...(standardsFindings ?? []).map((finding) => ({ axis: "standards" as const, label: finding.rule ?? finding.quote ?? "standards finding", file: finding.file, line: finding.line, quote: finding.quote })),
-					...(specFindings ?? []).map((finding) => ({ axis: "spec" as const, label: finding.quote ?? "spec finding", file: finding.file, line: finding.line, quote: finding.quote })),
-				];
-				if (findings.length > 0) {
-					try {
-						const attempt = await classifyViaRegistry(ctx.modelRegistry as unknown as ClassifyRegistry, judgeSettings, buildTriageContext(findings));
-						if (attempt.ok) {
-							const verdicts: TriageVerdict[] = interpretTriage(attempt.answers, findings.length, judgeSettings.triageConfidence);
-							triageRecords = verdicts.map((verdict, index) => ({
-								index: verdict.index,
-								axis: findings[index].axis,
-								label: findings[index].label,
-								choice: verdict.choice,
-								confidence: verdict.confidence,
-								uncertain: verdict.uncertain,
-							}));
-							meta.triage = triageRecords;
-							supervisor.persist(meta);
-							const blockers = verdicts.filter((verdict) => verdict.choice === "blocker");
-							const tally = summarizeTriage(triageRecords ?? []);
-							const uncertain = uncertainIndices(triageRecords ?? []);
-							triageNote =
-								`\n\nTriage: ${tally.blockers} blocker(s), ${tally.style} style, ${tally.ignore} ignore, ${tally.uncertain} uncertain.` +
-								(blockers.length > 0
-									? ` Only blockers consume a fix round: ${blockers.map((verdict) => `#${verdict.index} (${findings[verdict.index].axis})`).join(", ")}.`
-									: "") +
-								(uncertain.length > 0
-									? ` Read these yourself before acting: ${uncertain.map((index) => `#${index}`).join(", ")}.`
-									: "");
-						} else {
-							triageNote = `\n\nTriage unavailable (${attempt.reason}); read the findings yourself.`;
-						}
-					} catch (error) {
-						triageNote = `\n\nTriage failed (${error instanceof Error ? error.message : String(error)}); read the findings yourself.`;
-					}
-				}
+			if (report.kind === "failed") {
+				return textResult(`${jobId} produced nothing: ${report.error}\nRun directory: ${dir}`, { status: "failed", jobId, error: report.error });
 			}
-
-			// Learning that a contract passed is the loop's real trigger, whichever path
-			// noticed: a settle event, a manual harvest, or a contract file that landed
-			// after the job was already reported as failed. advanceChain guards against
-			// re-entering itself through this same harvest call.
-			if (settings.loop) void advanceChain(ctx, jobId);
 			return textResult(
-				`${jobId} contract_complete (executor ${meta.executor}/${meta.taskKind}).\n\n${contractText}\n\nRun dir: ${meta.paths.metaPath.replace(/\/meta\.json$/, "")}\nNext: for an implement job, close the ticket and dispatch the next ready one; for a review job, fold both axes into your report without merging them.${triageNote}`,
-				{ status: "contract_complete", jobId, contract, triage: triageRecords },
+				`${jobId} contract_complete (ticket ${meta.ticket}, ${meta.role} on ${meta.executor}).\n\n${JSON.stringify(report.contract, null, 2)}\n\nRun directory: ${dir}\n` +
+					(meta.role === "implement"
+						? `Next: confirm the branch and commits exist, then close ticket ${meta.ticket} the tracker's way. The ticket is reviewed next, on the other harness.`
+						: `Next: fold both axes into your report without merging them. Blocker findings earn a fix round; style and preference findings do not.`),
+				{ status: "contract_complete", jobId, ticket: meta.ticket, role: meta.role, contract: report.contract },
 			);
 		},
 	});
 
-	/**
-	 * Dispatches the loop may add per ticket, counted in this session. Fix rounds
-	 * are capped in plan.ts; this only stops a chain that keeps re-opening
-	 * reviews for the same ticket.
-	 */
-	const CHAIN_DISPATCH_BUDGET = 6;
-	const chainHops = new Map<string, number>();
-	/** Job ids whose chain step is in flight: the harvest tool re-enters the loop. */
-	const chainBusy = new Set<string>();
+	// -----------------------------------------------------------------------
+	// Status
 
-	/** The harness that did not write the code under review. */
-	function otherExecutor(executor: ExecutorKind): ExecutorKind {
-		return executor === "codex" ? "claude" : "codex";
-	}
-
-	/** The contract file the job wrote, or undefined when it cannot be read. */
-	function readContract(meta: JobMeta): ContractSummary | undefined {
-		try {
-			return JSON.parse(readFileSync(meta.paths.resultPath, "utf8"));
-		} catch {
-			return undefined;
-		}
-	}
-
-	/** Tell a human where the loop stopped, on whichever channel this session has. */
-	async function pingLoop(ctx: ChainCtx, meta: JobMeta, body: string): Promise<void> {
-		if (!settings.notify) return;
-		const title = `fleet: ${meta.ticket} loop`;
-		if (ctx.hasUI) ctx.ui.notify(`${title}: ${body}`, "info");
-		else await supervisor.notify(title, body);
-	}
-
-	/**
-	 * The ticket's review loop, driven by events instead of a model turn.
-	 *
-	 * When a job settles, harvest it and ask loop.ts what comes next. The chain
-	 * calls the same tools a model would call, so the gate, the triage, and the
-	 * once-per-job ledger entry are not a second implementation of them.
-	 *
-	 * Spend is bounded twice: fix rounds stop at PI_FLEET_MAX_FIX_ROUND in
-	 * plan.ts, and a ticket gets at most CHAIN_DISPATCH_BUDGET loop dispatches.
-	 * An unavailable judgment channel makes nextStep halt, so the loop degrades
-	 * to a note instead of inventing a round.
-	 */
-	async function advanceChain(ctx: ChainCtx, jobId: string): Promise<void> {
-		// advanceChain harvests through the tool, and the harvest tool advances the
-		// chain: the guard is what keeps those two from calling each other forever.
-		if (chainBusy.has(jobId)) return;
-		chainBusy.add(jobId);
-		try {
-			await advanceChainOnce(ctx, jobId);
-		} finally {
-			chainBusy.delete(jobId);
-		}
-	}
-
-	/** One turn of the loop. Called only through advanceChain, which holds the guard. */
-	async function advanceChainOnce(ctx: ChainCtx, jobId: string): Promise<void> {
-		const job = supervisor.get(jobId);
-		if (!job) return;
-		const ticket = job.ticket;
-		const hops = chainHops.get(ticket) ?? 0;
-		if (hops >= CHAIN_DISPATCH_BUDGET) {
-			await pingLoop(ctx, job, `stopped: ticket ${ticket} reached the loop budget of ${CHAIN_DISPATCH_BUDGET} dispatches`);
-			return;
-		}
-		// Harvest through the tool: it judges the contract, runs the triage, and
-		// reports the job to the ledger exactly once.
-		await harvestTool.execute("fleet-loop", { job_id: jobId }, undefined, undefined, ctx);
-		const settled = supervisor.get(jobId);
-		if (!settled) return;
-		// The contract is read once, before the step is decided: the loop needs the
-		// executor's own status, not just the fact that the contract validated.
-		const contract = readContract(settled);
-		const step = nextStep(settled, contract, settings.maxFixRound, settled.triage !== undefined || !judgeSettings.enabled);
-		if (step.kind === "review") {
-			chainHops.set(ticket, hops + 1);
-			await dispatchTool.execute(
-				"fleet-loop",
-				{ ticket, worktree: settled.worktree, executor: otherExecutor(settled.executor), task_kind: "review", brief: reviewBriefFor(settled, contract ?? {}), base: contract?.branch ?? "HEAD~1" },
-				undefined,
-				undefined,
-				ctx,
-			);
-			return;
-		}
-		if (step.kind === "fix") {
-			chainHops.set(ticket, hops + 1);
-			await dispatchTool.execute(
-				"fleet-loop",
-				{ ticket, worktree: settled.worktree, executor: otherExecutor(settled.executor), task_kind: "implement", brief: fixBriefFor(settled, step.findings), fix_round: settled.fixRound + 1 },
-				undefined,
-				undefined,
-				ctx,
-			);
-			return;
-		}
-		if (step.kind === "done") {
-			await pingLoop(ctx, settled, `closed: the review found no blockers. Harvest and the branch are yours to merge.`);
-			return;
-		}
-		await pingLoop(ctx, settled, `halted: ${step.reason}`);
-	}
 	const statusTool = defineTool({
 		name: "FleetStatus",
 		label: "Fleet Status",
-		description: STATUS_TOOL_DESCRIPTION,
-		promptSnippet: "List dispatched fleet jobs, and the ticket frontier when you hand it over",
-		promptGuidelines: [
-			"Call FleetStatus with no arguments when you need to see what is in flight or what to harvest next.",
-			"Call FleetStatus with the tracker's tickets when you need to know what may start next: it returns the ready frontier, the waiting set, and structural problems in the graph.",
-		],
-		parameters: Type.Object({
-			tickets: Type.Optional(
-				Type.Array(
-					Type.Object({
-						id: Type.String({ description: "Ticket id, the same string FleetDispatch takes." }),
-						status: Type.String({ description: "open | in_progress | done | failed | blocked, as the tracker reports it." }),
-						blockers: Type.Optional(Type.Array(Type.String({ description: "Ids of tickets that must be done first." }))),
-					}),
-					{ description: "The whole ticket set, read from the tracker by you. The extension does not own ticket state." },
-				),
-			),
-		}),
-		execute: async (_toolCallId, params) => {
-			const jobs = supervisor.all();
-			// The frontier is computed here and nowhere else: the graph is the model's,
-			// read from its tracker, and this only answers what may start.
-			const tickets = (params as { tickets?: Ticket[] }).tickets;
-			const report = tickets && tickets.length > 0 ? reportFrontier(tickets) : undefined;
-			const summary = {
-				jobs: jobs.map((job) => ({ id: job.id, ticket: job.ticket, state: job.state, executor: job.executor, taskKind: job.taskKind, fixRound: job.fixRound, pane: job.pane, paneClosedAt: job.paneClosedAt })),
-				openTabs: supervisor.listOpenTabs(),
-				frontier: report?.summary,
+		description: STATUS_DESCRIPTION,
+		promptSnippet: "List fleet jobs on disk, including jobs from earlier sessions",
+		promptGuidelines: ["Call this when you need to see what is in flight, or after a reload, before deciding what to dispatch or harvest next."],
+		parameters: Type.Object({}),
+		execute: async () => {
+			const jobs = runner.all();
+			const stale = runner.stale();
+			const openTabs = [...new Set(jobs.filter((job) => job.pane && job.paneClosedAt === undefined).map((job) => job.pane!.tabId))];
+			const details = {
+				jobs: jobs.map((job) => ({
+					id: job.id,
+					ticket: job.ticket,
+					role: job.role,
+					executor: job.executor,
+					fixRound: job.fixRound,
+					state: job.contractOk === undefined ? "running" : job.contractOk ? "complete" : "contract_failed",
+					paneId: job.pane?.paneId,
+					paneClosedAt: job.paneClosedAt,
+				})),
+				openTabs,
+				stale,
 			};
-			const frontierText = report ? `\n${report.text}` : "";
-			if (jobs.length === 0) {
-				return textResult(`No fleet jobs in this session. Jobs from earlier sessions appear after loadFromDisk (a reload rehydrates them).${frontierText}`, summary);
-			}
-			const running = supervisor.runningCount();
-			const lines = jobs.map(jobLine);
-			return textResult(
-				`${jobs.length} job(s), ${running} running${summary.openTabs.length > 0 ? `, ${summary.openTabs.length} fleet pane tab(s) still open` : ""}:\n${lines.join("\n")}${frontierText}`,
-				summary,
-			);
+			const head =
+				jobs.length === 0
+					? `No fleet jobs under ${settings.runsDir}. The frontier of ready tickets lives in the tracker's own files, not here.`
+					: `${jobs.length} job(s) on disk${openTabs.length > 0 ? `, ${openTabs.length} pane tab(s) still open` : ""}:\n${jobs.map(jobLine).join("\n")}`;
+			// Leftovers from another release are named rather than hidden. A run
+			// directory this release cannot read is not a job, so it is not counted,
+			// not harvested, and not closed — but the user still needs to know it is
+			// there and why it is inert.
+			const staleNote =
+				stale.length > 0
+					? `\n\n${stale.length} run director${stale.length === 1 ? "y" : "ies"} this release cannot read (leftovers from an earlier pi-fleet):\n${stale.map((run) => `  ${run.id} — ${run.reason}`).join("\n")}\nDelete them, or dispatch their tickets again.`
+					: "";
+			return textResult(`${head}${staleNote}`, details);
 		},
 	});
+
+	// -----------------------------------------------------------------------
+	// Cleanup
 
 	const cleanupTool = defineTool({
 		name: "FleetCleanup",
 		label: "Fleet Cleanup",
-		description: `Close the Herdr pane tabs that fleet jobs created, once those jobs settled. Call it when the work a fleet run touched is fully read: harvested, reviewed, and any file changes you still need are inspected.
-
-What it closes: only tabs this extension created for pane jobs, never the worktree, never its Herdr workspace, never a pane you opened yourself. A job that is still running keeps its tab: close it only after the job settles (harvest it, or stop it from the pane first).
-
-The run dir and every log survive cleanup, so a closed tab never loses evidence.`,
+		description: CLEANUP_DESCRIPTION,
 		promptSnippet: "Close settled fleet job pane tabs once the run is fully read",
-		promptGuidelines: [
-			"Use FleetCleanup after the last harvest of a run, not before: the pane is where the user reads executor output and checks file changes.",
-			"FleetCleanup reports running jobs as blocked; harvest them instead of closing their tabs out from under them.",
-		],
+		promptGuidelines: ["Close tabs after the last harvest of a run, not before: the pane is where the human reads the executor's output and checks the file changes."],
 		parameters: Type.Object({
-			job_id: Type.Optional(Type.String({ description: "Close the tab of one settled job. Requires the job to have run in a pane." })),
+			job_id: Type.Optional(Type.String({ description: "Close one settled job's tab." })),
 			all: Type.Optional(Type.Boolean({ description: "Close every tab whose jobs have all settled. Ignored when job_id is present." })),
 		}),
 		execute: async (_toolCallId, params) => {
 			const args = params as { job_id?: string; all?: boolean };
 			const jobId = args.job_id?.trim();
 			if (jobId) {
-				const result = await supervisor.closeTab(jobId);
+				const result = await runner.closeTab(jobId);
 				if (!result.ok) return textResult(`FleetCleanup refused: ${result.error}`, { status: "rejected", jobId });
-				return textResult(
-					result.alreadyClosed ? `${jobId}: tab already closed.` : `${jobId}: tab closed. The worktree and its files are untouched; the run dir keeps every log.`,
-					{ status: "closed", jobId, alreadyClosed: result.alreadyClosed === true },
-				);
+				return textResult(result.alreadyClosed ? `${jobId}: tab already closed.` : `${jobId}: tab closed. The worktree and its files are untouched.`, {
+					status: "closed",
+					jobId,
+					alreadyClosed: result.alreadyClosed === true,
+				});
 			}
 			if (args.all !== true) {
-				return textResult("FleetCleanup needs job_id or all: true. FleetStatus lists the jobs and their tabs.", { status: "rejected" });
+				return textResult("FleetCleanup needs job_id or all: true.", { status: "rejected" });
 			}
-			const paneJobs = supervisor.all().filter((job) => job.pane !== undefined);
-			if (paneJobs.length === 0) return textResult("No pane jobs in this session; nothing to close.", { status: "noop", closed: [] });
-			const plan = closableTabs(paneJobs);
+			const jobs = runner.all();
+			const paneJobs = jobs.filter((job) => job.pane !== undefined);
+			if (paneJobs.length === 0) return textResult("No pane jobs on disk; nothing to close.", { status: "noop", closed: [] });
+			const tabs = new Map<string, string>();
+			for (const job of paneJobs) if (job.pane && job.paneClosedAt === undefined) tabs.set(job.pane.tabId, job.id);
 			const closed: string[] = [];
+			const blocked: string[] = [];
 			const failed: string[] = [];
-			for (const job of paneJobs) {
-				const tabId = job.pane?.tabId;
-				if (!tabId || !plan.tabs.includes(tabId)) continue;
-				const result = await supervisor.closeTab(job.id);
-				if (result.ok) {
-					if (!closed.includes(tabId)) closed.push(tabId);
-				} else if (!failed.includes(tabId)) {
-					failed.push(`${tabId}: ${result.error}`);
+			for (const [tabId, id] of tabs) {
+				// A tab holding an unsettled job keeps its pane: the pane is where the human
+				// reads the executor's output and checks the file changes.
+				if (jobUnsettled(jobs, tabId)) {
+					blocked.push(tabId);
+					continue;
 				}
+				const result = await runner.closeTab(id);
+				if (!result.ok) failed.push(`${tabId}: ${result.error}`);
+				else if (!result.alreadyClosed) closed.push(tabId);
 			}
-			const blockedText = plan.blocked.length > 0 ? `\nBlocked, still running: ${plan.blocked.join(", ")}. Harvest those jobs first.` : "";
-			const failedText = failed.length > 0 ? `\nFailed: ${failed.join("; ")}` : "";
-			return textResult(
-				closed.length > 0 ? `Closed ${closed.length} tab(s): ${closed.join(", ")}.${blockedText}${failedText}` : `Nothing to close.${blockedText}${failedText}`,
-				{ status: closed.length > 0 ? "closed" : "noop", closed, blocked: plan.blocked, failed },
-			);
+			const notes = `${blocked.length > 0 ? `\nBlocked, not settled yet: ${blocked.join(", ")}. Harvest those jobs first.` : ""}${failed.length > 0 ? `\nFailed: ${failed.join("; ")}` : ""}`;
+			return textResult(closed.length > 0 ? `Closed ${closed.length} tab(s): ${closed.join(", ")}.${notes}` : `Nothing to close.${notes}`, {
+				status: closed.length > 0 ? "closed" : "noop",
+				closed,
+				blocked,
+				failed,
+			});
 		},
 	});
 
@@ -656,4 +416,79 @@ The run dir and every log survive cleanup, so a closed tab never loses evidence.
 	pi.registerTool(harvestTool);
 	pi.registerTool(statusTool);
 	pi.registerTool(cleanupTool);
+
+	// -----------------------------------------------------------------------
+	// Setup
+
+	/**
+	 * `/fleet-setup` installs the upstream skills into this project, filtered.
+	 *
+	 * It is a command rather than a tool on purpose. The install is a one-time
+	 * project decision with a deterministic answer, and a model turn would only add
+	 * a way to do it half-way. It is a command rather than a prompt template for the
+	 * same reason: this extension knows where its own package lives, and a template
+	 * would leave the model to find the script.
+	 */
+	pi.registerCommand("fleet-setup", {
+		description: "Install the upstream planning skills into this project, filtered, without touching global settings",
+		handler: async (_args, ctx) => {
+			const run = async (extra: string[]) => {
+				try {
+					const { stdout, stderr } = await execFileAsync(process.execPath, [INSTALL_SCRIPT, "--target", process.cwd(), ...extra], { cwd: process.cwd(), maxBuffer: 4 * 1024 * 1024 });
+					return { ok: true as const, text: `${stdout}${stderr}`.trim() };
+				} catch (error) {
+					const failure = error as { stdout?: string; stderr?: string; message?: string };
+					return { ok: false as const, text: `${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim() || failure.message || "the install script failed" };
+				}
+			};
+
+			const already = await run(["--check"]);
+			if (already.ok) {
+				ctx.ui.notify("pi-fleet: the planning skills are already installed here", "info");
+				return;
+			}
+
+			const installed = await run([]);
+			if (!installed.ok) {
+				ctx.ui.notify(`pi-fleet: setup failed\n${installed.text}`, "error");
+				return;
+			}
+			// The loader read this project's settings at startup, so the new skills
+			// appear after a reload and not before. Say so rather than letting the user
+			// conclude that the command did nothing.
+			ctx.ui.notify(`pi-fleet: planning skills installed\n${installed.text}\nRun /reload so this session picks them up.`, "info");
+		},
+	});
+}
+
+/**
+ * Read the ticket's current text. The brief copies it, so the executor needs no
+ * access to the tracker and an uncommitted ticket is still visible to it.
+ */
+function readTicketText(path: string): string {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * Return a ticket to the frontier after a dispatch that started nothing.
+ *
+ * Swallowing the error is deliberate: a ticket left claimed by a failed dispatch
+ * is recoverable by hand, and throwing here would replace a useful tool result
+ * with an unrelated filesystem error.
+ */
+function releaseClaim(path: string): void {
+	try {
+		writeFileSync(path, setStatus(readFileSync(path, "utf8"), READY), "utf8");
+	} catch {
+		// Nothing to do: the run directory is absent, so the tool result is the only
+		// record that this ticket needs its status reset.
+	}
+}
+
+function jobUnsettled(jobs: JobMeta[], tabId: string): boolean {
+	return jobs.some((job) => job.pane?.tabId === tabId && job.contractOk === undefined);
 }
