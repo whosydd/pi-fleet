@@ -121,6 +121,10 @@
   `npm run smoke` 每次端到端跑），理由记在票的 Comments 里。
 - **pi 提交**：`3977960 fix(smoke): make the smoke decision a pure function`（在 `5f202eb` 之上）。
   票 `Status: done`，5 个 settled job 的 tab 已 cleanup。
+- **合并与清理**：`bfb4ccb merge: ticket 01, the smoke test now judges what it loads`；合并后
+  `npm run check` 89 通过。随后用 `git worktree remove` 删掉票 01 的 worktree。
+  `herdr worktree remove` 此处不可用：cleanup 关掉最后一个 tab 后 Herdr 回收了 workspace，
+  它只认活着的 workspace（`workspace_not_found`）。
 
 真跑暴露的三件事，前两件当场修掉：
 
@@ -142,7 +146,9 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
 2. review 看的是**未提交的工作树**。pi 派发前先 `git -C <worktree> add -A`，
    否则 `git diff` 看不到新文件。
 3. review 无阻塞 → pi 自己 `git commit`（conventional commit，subject 取票标题），
-   再把票设 `done` 并记下 branch 与 sha。
+   `git merge --no-ff` 合入 main，合并后跑一遍 `npm run check`，再把票设 `done` 并记下
+   branch 与 sha。最后 `FleetCleanup` 关 tab，`git worktree remove` 删 worktree
+   （`herdr worktree remove` 只认活着的 workspace，此处不可用）。
 4. review 有阻塞 → 票设回 `ready-for-agent` → codex 在同一未提交工作树上改 →
    重新 review。轮数上限照旧（`PI_FLEET_MAX_FIX_ROUND`，默认 2）。
 5. 派发文本不再一刀切禁止子代理（implement 侧删除该禁令）；review 侧保留反递归
@@ -225,7 +231,6 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
 
 ## 下次开工入口
 
-先提交主仓库的改动（新流程、watcher、workspace 修复），再 `/reload` 让 watcher 生效。
-然后用**第二张票**做一次全自动链路真跑：dispatch 之后不动键盘，验证
-wait 信号 → harvest → review → pi 提交 一路自己走完。票的内容从 P2 里挑一个小的，
-或由用户指定。
+票 02 已就绪：`.scratch/manifest-exclusions/issues/01-collapse-repeated-exclusion-reasons.md`，
+worktree 已建于 `fleet/02-manifest-exclusions`（workspace w26）。用户 `/reload` 后派发，
+然后不动键盘，验证全自动链路：wait 信号 → harvest → review → pi 提交 → 合并 → 清理。

@@ -3,7 +3,8 @@
 One ticket at a time in a Herdr pane: a Codex or Claude executor builds it, the
 other harness reviews the uncommitted change, pi commits it, and pi judges the
 contract that comes back. A settled job wakes pi by itself, so the hand-off from
-build to review needs no prompting.
+build to review needs no prompting. When the review passes, pi merges the branch
+into the main checkout and removes the worktree.
 
 ## Install
 

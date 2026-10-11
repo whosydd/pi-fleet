@@ -139,14 +139,16 @@ the axes apart in your own report.
 Read the findings. A finding earns a fix round only when it blocks merging. A
 style or preference finding does not.
 
-- No blocking finding: commit the work yourself, then close the ticket.
+- No blocking finding: commit the work and merge it.
 
       git -C <worktree> add -A
       git -C <worktree> commit -m "<type>(<scope>): <subject>"
+      git merge --no-ff <branch> -m "merge: <ticket title>"
 
   The subject is the ticket's title. The type and the scope follow this
-  repository's commit convention. Record the branch and the commit sha in the
-  ticket, set its `Status:` line to `done`, report the two axes, and stop.
+  repository's commit convention. Run the merge from the main checkout, and run
+  the repository's checks once after it. Record the branch and the commit sha in
+  the ticket, set its `Status:` line to `done`, report the two axes, and stop.
 
 - A blocking finding, and the fix round cap is not reached: set the ticket's
   `Status:` line back to `ready-for-agent`, then call `FleetDispatch` with
@@ -159,10 +161,18 @@ style or preference finding does not.
 
 ### 7. Clean up
 
-After the last harvest of a run, call `FleetCleanup` with `all: true`. Commit
-first: cleanup closes the tab, and an uncommitted worktree holds the only copy
-of the work. Read the pane's output and the file changes before that. The run
-directory keeps every log, so a closed tab loses no evidence.
+After the last harvest of a run, call `FleetCleanup` with `all: true`. The
+commit comes first: cleanup closes the tab, and an uncommitted worktree holds the
+only copy of the work. Read the pane's output and the file changes before that.
+The run directory keeps every log, so a closed tab loses no evidence.
+
+Then remove the worktree of a ticket that is `done`:
+
+    git worktree remove <worktree>
+
+Use the git command, not `herdr worktree remove`: cleanup has just closed the
+worktree's last tab, Herdr closed the workspace with it, and the Herdr command
+matches only a live workspace.
 
 ## Rules that hold at every step
 
