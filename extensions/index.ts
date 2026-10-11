@@ -216,9 +216,9 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		parameters: Type.Object({
 			ticket: Type.String({ description: "Absolute path of the ticket file, e.g. /repo/.scratch/login/issues/03-token-refresh.md. Its NN prefix is the ticket id recorded in the contract." }),
 			worktree: Type.String({ description: "Absolute path of an existing git worktree to run in. Create it with `herdr worktree create` before dispatching." }),
-			role: Type.String({ description: '"implement" builds the ticket and commits; "review" reviews committed work against base and reports two axes. A ticket gets both, in that order.' }),
+			role: Type.String({ description: '"implement" builds the ticket in the worktree without committing; "review" reviews the uncommitted change against base and reports two axes. A ticket gets both, in that order.' }),
 			executor: Type.Optional(Type.String({ description: 'Which harness runs the job: "codex" or "claude". Omit to let the tool choose — codex for implement, and for review the harness that did not write the code.' })),
-			base: Type.Optional(Type.String({ description: 'For role "review": the commit, branch, or tag to diff against. Required for reviews, and normally the branch the implement job reported in its contract.' })),
+			base: Type.Optional(Type.String({ description: 'For role "review": the commit, branch, or tag the work sits on. Required for reviews, and normally the branch the implement job reported in its contract.' })),
 			fix_round: Type.Optional(Type.Number({ description: "0 for a first dispatch (default). Increment when re-dispatching after a review found blockers; capped, and the tool refuses past the cap." })),
 			findings: Type.Optional(Type.Array(Type.String({ description: "One blocker finding, as the review reported it." }))),
 			model: Type.Optional(Type.String({ description: "Model override passed through to the executor CLI. Omit for the executor's own default." })),
@@ -371,7 +371,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			return textResult(
 				`${jobId} contract_complete (ticket ${meta.ticket}, ${meta.role} on ${meta.executor}).\n\n${JSON.stringify(report.contract, null, 2)}\n\nRun directory: ${dir}\n` +
 					(meta.role === "implement"
-						? `Next: confirm the branch and commits exist, then close ticket ${meta.ticket} the tracker's way. The ticket is reviewed next, on the other harness.`
+						? `Next: stage the worktree's changes, then dispatch the review of ticket ${meta.ticket} on the other harness. Commit only after that review passes.`
 						: `Next: fold both axes into your report without merging them. Blocker findings earn a fix round; style and preference findings do not.`),
 				{ status: "contract_complete", jobId, ticket: meta.ticket, role: meta.role, contract: report.contract },
 			);

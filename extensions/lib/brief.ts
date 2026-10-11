@@ -26,9 +26,21 @@
  *
  * The upstream `implement` skill is not named at all. Its six instructions are
  * covered here more reliably (the brief carries the ticket, the contract makes
- * the executor report real test numbers, the task says to commit) except for one
- * — its closing step invoking the upstream review skill — which is exactly the
- * step that would put the review back inside the run that wrote the code.
+ * the executor report real test numbers, the task says what to leave behind)
+ * except for one — its closing step invoking the upstream review skill — which
+ * is exactly the step that would put the review back inside the run that wrote
+ * the code.
+ *
+ * Two rules below are this package's own:
+ *
+ *   - an implement job never commits. Its changes stay in the worktree, and the
+ *     orchestrator commits after the review passes. So the contract carries no
+ *     commits, and a review reads the working tree rather than a range of
+ *     commits;
+ *   - the review runs directly, on both axes, with no sub-agents. That is the
+ *     anti-recursion guard: the upstream review skill runs its axes in
+ *     sub-agents and does not forbid them from spawning more. Field reports
+ *     reached fifty-plus agents, and upstream has not shipped the fix.
  */
 
 import { schemaFor } from "./contract.ts";
@@ -62,9 +74,9 @@ export const ROLE_SKILLS: Record<FleetRole, string[]> = {
 /** Rules that hold for both roles. */
 const COMMON_RULES = [
 	"You are a fleet executor. One ticket, one job. Read the brief file and do exactly what it asks.",
-	"Commit your work to the current branch with a clear message. Never run git stash, git commit --amend, or any force push.",
+	"Do not commit. Leave your changes in the worktree: the orchestrator reviews them first, and commits after the review passes.",
+	"Never run git stash, git commit --amend, or any force push. The stash is shared by every worktree of this repository.",
 	"Do not close, tick, or edit the tracker ticket: the orchestrator owns ticket state.",
-	"Do not spawn subagents: perform this job directly.",
 	"Your message in this terminal is read by a human. The orchestrator reads only the contract file, so nothing you say in prose reaches it.",
 ];
 
@@ -86,7 +98,7 @@ const ROLE_RULES: Record<FleetRole, string[]> = {
 		"The orchestrator dispatches an independent review of your work after this job, using a different harness. Do not run a code review yourself.",
 	],
 	review: [
-		"Review committed work only: git diff against the fixed point below. Never review staged or working-tree changes.",
+		"Review the working tree, not a commit: the implement job leaves its changes uncommitted. The orchestrator stages them, so `git diff <base>` shows the whole change, new files included.",
 		...REVIEW_METHOD,
 		"Do not fix anything, do not commit, do not push.",
 		"Do not invoke your harness's review command or spawn additional agents: perform this review directly, both axes yourself.",
@@ -116,7 +128,7 @@ export function buildTask(input: TaskInput): string {
 		`Read the brief at: ${input.briefPath}`,
 		`If your harness provides the ${skills.map((name) => `\`${name}\``).join(" or ")} skill, use it for the method; the rules above hold either way.`,
 	];
-	if (input.base) lines.push(`Review fixed point (the diff is git diff ${input.base}...HEAD): ${input.base}`);
+	if (input.base) lines.push(`Review fixed point (the diff is git diff ${input.base}, over the uncommitted working tree): ${input.base}`);
 	if (input.fixRound > 0) {
 		lines.push(`This is fix round ${input.fixRound}: address only the findings named in the brief, and change nothing else.`);
 	}

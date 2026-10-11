@@ -100,22 +100,103 @@
   只有一个提交者，所以它今天价值为零，激活条件是推上 GitHub。修完上面那条之后它才有
   实际意义：CI 跑的是新鲜克隆，没有本机全局配置可以掩盖失败。**先做 T1，之后再决定留删。**
 
+## T1 真跑记录（完成）
+
+- **implement**：codex，`job_01_1791733796513_9lr8`，契约 `complete`；commit
+  `5f202eb fix(smoke): judge the loaded entry and its tools`（重构 `smoke/load.ts`，
+  新增 `test/smoke.test.ts`）；契约自报 `npm run check` 84 通过。
+- **review**：claude，`job_01_1791735031901_7554`，契约 `complete`，两轴分开报，无递归
+  spawn。它自己把 `smoke/load.ts` 改回 `includes("pi-fleet")` 重跑测试，证明了新测试
+  抓不住那条验收。两轴各一条 blocker：
+  - standards：`test/smoke.test.ts` 把真实 pi loader 与 session 拉进 `npm run test`
+    （每例一次，共 5 次），与 AGENTS.md 把 loader 检查放在 `npm run smoke` 的分工冲突；
+    `smoke/load.ts` 还算了一遍包根，而 `extensions/lib/skills.ts` 已导出 `PACKAGE_ROOT`。
+  - spec：票的第二条验收（按传入 entry 路径归因）没有被测试钉住：改回 substring 匹配后，
+    `node --test test/smoke.test.ts` 仍然 5 pass。脚本本身是对的，测试没锁住它。
+- **fix round 1**：codex，`job_01_1791736483799_3viw`，契约 `complete`；把 smoke 判定抽成
+  `extensions/lib/smoke.ts` 纯函数，`npm run check` 84 通过（未提交——新流程首次验证成功）。
+- **第二次 review**：claude，`job_01_1791736945041_7yvq`，契约 `complete`。spec 全过：
+  reviewer 重建了三个坏副本逐个验证 `exit 1`。standards 一条保留意见：集成测试被换成
+  纯函数测试，坏树路径不再有回归守卫。判定不阻塞（判定分支有单测，健康树由
+  `npm run smoke` 每次端到端跑），理由记在票的 Comments 里。
+- **pi 提交**：`3977960 fix(smoke): make the smoke decision a pure function`（在 `5f202eb` 之上）。
+  票 `Status: done`，5 个 settled job 的 tab 已 cleanup。
+
+真跑暴露的三件事，前两件当场修掉：
+
+| # | 现象 | 处理 |
+| --- | --- | --- |
+| 1 | 会话里跑的是 18:08 加载的旧扩展，磁盘上已删的 vendored execution 检查仍拒绝 dispatch | 与代码无关，`/reload` 后消失。教训：改扩展后不 reload，现场就是旧内存 |
+| 2 | `FleetCleanup` 关掉 worktree 最后一个 tab 后 Herdr 回收整个空 workspace；再次派发时 `runner.ts#workspaceFor` 回退到 `HERDR_WORKSPACE_ID`，pane 静默落进主会话 workspace | **已修**：删掉回退，改为 `herdr worktree open --path`（幂等）自愈，失败才拒绝；新增 2 个 runner 测试 + 1 个 herdr 测试；SKILL 与两个工具描述同步 |
+| 3 | `skills/fleet/SKILL.md` 步骤 5 要求把票设成 `done` 再派 review，而 `claimTicket` 只接受 `ready-for-agent`，review 必然被拒 | **已修**：步骤 5 改为把票设回 `ready-for-agent` 并记录 branch；`done` 移到 review 无阻塞之后；fix round 同样先设回 |
+
+环境侧（不是本包的 bug）：codex 默认 provider 的 `/v1/responses` 返回 404，
+claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配后两条通道的
+最小探针都通过。
+
+## 流程变更：执行器不提交，review 通过后由 pi 提交
+
+用户定下的流程，已落地到代码与技能文档：
+
+1. 执行器只改工作树，**不提交**。
+2. review 看的是**未提交的工作树**。pi 派发前先 `git -C <worktree> add -A`，
+   否则 `git diff` 看不到新文件。
+3. review 无阻塞 → pi 自己 `git commit`（conventional commit，subject 取票标题），
+   再把票设 `done` 并记下 branch 与 sha。
+4. review 有阻塞 → 票设回 `ready-for-agent` → codex 在同一未提交工作树上改 →
+   重新 review。轮数上限照旧（`PI_FLEET_MAX_FIX_ROUND`，默认 2）。
+5. 派发文本不再一刀切禁止子代理（implement 侧删除该禁令）；review 侧保留反递归
+   守卫，因为“不能无限循环”正是它要防的事故。
+
+改动文件：`brief.ts`（规则与 review 输入）、`contract.ts`（implement schema 删除
+`commits`，改为显式拒绝该字段）、`index.ts`（工具描述）、`skills/fleet/SKILL.md`
+（步骤 5–7）、`README.md`，以及 brief/contract/runner 三套测试。`npm run check` 81
+通过。
+
+**注意**：当前会话的扩展是旧内存，需 `/reload` 后新流程才生效。T1 的 codex 已经
+提交了（旧流程产物），所以 T1 不需要 pi 补提交；新流程从下一张票开始。
+
+## 自动衔接：job settle 即唤醒会话（已实现，待 /reload）
+
+用户要求“codex 执行完毕后直接 claude review”，不要等人输入。pi 提供
+`pi.sendUserMessage()`（文档：always triggers a turn），这就是缺失的钩子。
+
+实现（第二轮改为信号驱动）：
+
+- **等 Herdr 的状态信号，不轮询**：`runner.waitAgent()` 调 `herdr agent wait <name>
+  --timeout 300000`，agent 状态一变就返回。Herdr 没有事件订阅命令（`herdr api` 只有
+  拉取式 `snapshot`/`schema`），`agent wait` 就是它的状态通知机制。
+- 醒来后用 `runner.harvest()` 判定；`running` 就节流 15 秒再等，避开“agent 已 settled
+  但契约未写”引起的空转。**契约文件仍是唯一成功判据**，Herdr 的 idle/done 仍只表示
+  ready for input。
+- settle 后用 `pi.sendUserMessage()`（pi 文档：always triggers a turn，
+  `deliverAs: "followUp"`）唤醒会话，消息只说“某 job settled，去 FleetHarvest”，不搬运
+  契约内容。
+- 扩展加载时扫描 `runner.all()` 里未 settle 的 job 并接管：`/reload` 或重启后，旧 job
+  完成也会唤醒。手动 harvest 同一个 job 会注销 watcher，避免多唤一次。
+- 开关：`PI_FLEET_AUTO_CONTINUE`（默认 on）。常量在 `extensions/lib/watch.ts`：
+  `WATCH_WAIT_SLICE_MS = 5min`、`WATCH_THROTTLE_MS = 15s`。
+
+`npm run check` 84 通过。
+
 ## P0 — 首次真跑
 
-- [ ] **T1 一张票、codex、pane**：`/fleet-setup` → `setup-matt-pocock-skills` →
-  `herdr worktree create` → `FleetDispatch` → 执行器写 `result.json` →
-  `FleetHarvest` 过校验。
-- [ ] **T2 同票 claude review**：base 取 implement 契约的 `branch`。验收：两轴
-  findings 分开，且 claude 没有递归 spawn。
-- [ ] **T3 并发认领 / T4 坏契约 / T5 idle 宽限**：见前一轮清单，未变。
+- [x] **T1 一张票、codex、pane**：完成，两半都过校验（详见上节）。
+  `/fleet-setup` → `setup-matt-pocock-skills` → `herdr worktree create` →
+  `FleetDispatch` → 执行器写 `result.json` → `FleetHarvest` 过校验。
+- [x] **T2 同票 claude review**：完成，还多跑了一轮 fix 后的复审。两轴分开报，
+  claude 没有递归 spawn（它甚至自己重建代码验证测试断言是否为真）。
+- [ ] **T3 并发认领 / T4 坏契约 / T5 idle 宽限**：故障路径，单测已覆盖
+  （`claimTicket` 二次认领、契约字段校验、idle grace），真跑未做。低优先。
 
-## P1 — 待复核的环境假设
+## P1 — 环境假设（已由 T1 真跑验证）
 
-- [ ] `herdr agent start --timeout <ms>` 这个 flag 来自旧架构的真跑记录，但
-  herdr 文档只对 `agent prompt` / `agent wait` 记了 `--timeout`。跑 T1 就知道；
-  不行就删，靠默认 30 秒。
-- [ ] `herdr tab create --workspace --label --cwd --no-focus` 的完整 flag 集合同理。
-- [ ] `herdr worktree create` 的确切语法。skill 让模型先跑 `herdr worktree` 读帮助。
+- [x] `herdr agent start --timeout <ms>`：有效。每次 dispatch 都带 `--timeout 120000`，
+  herdr 0.9.3 接受并正常启动 codex 与 claude。
+- [x] `herdr tab create --workspace --label --cwd --no-focus`：有效，5 个 job 都这么开 tab。
+- [x] `herdr worktree create`：语法已用（`--cwd --branch --base --no-focus
+  --trust-repository`）。另发现 `herdr worktree open --path` 用于恢复被 Herdr 回收的
+  workspace（见 T1 记录第 2 条）。
 
 ## P2 — 明确留到后面的
 
@@ -132,21 +213,19 @@
   检查而存在。那个检查已删，这几条可以合并成一条说明。哪个想启用就改分类并重跑
   `/fleet-setup`。
 
-## P3 — 上游补丁（上一轮列出、尚未做）
+## P3 — 上游补丁（T1 后的结论）
 
-- [ ] **去掉 `implement` 的加载需求**。`implement/SKILL.md` 六条指令里五条我们已有更可靠的
-  实现（brief 拷票、task 给 tdd 路径、契约的 `tests` 字段强制跑测试、task 说提交），
-  第六条"自审"是我们主动要移除的。**净贡献为零，而它带来一处与上游的指令冲突。**
-  去掉后只剩 `code-review` 一处需要处理。
-- [ ] **给 `code-review` 提 PR**：加反递归那一行。matt 自己的文档承认这是未修的 bug，
-  而 `1dab982` 证明他会合这类修复。
-- [ ] **`invocation.md` 的约定冲突**：上游要求 skill 之间按名字调 Skill tool。我们的任务
-  文本现在也按名字引用，所以冲突消失了，但问题还在：执行器读到
-  `Call the Skill tool with "tdd"` 时能否解析，取决于 harness。
-  这决定我们是否需要改上游文件——即 fork 才是否必要。**先做 T1，用现场结果回答。**
+- [x] **去掉 `implement` 的加载需求**：已做到。brief 完全不引用上游 `implement`，
+  它的自审指令不再进入执行器。
+- [ ] **给 `code-review` 提 PR**：加反递归那一行。仍值得做；本包已用自己的守卫兜住
+  （review 任务里显式禁止 spawn，两轮真跑都没有递归）。
+- [x] **`invocation.md` 的约定冲突**：T1 现场显示 codex 的 pane 日志写着
+  "Need use tdd skill … skill exists. Must read skill file"——按名字引用可用，
+  不需要 fork 上游文件。
 
 ## 下次开工入口
 
-从 **T1** 开始。它同时回答三个悬而未决的问题：`agent start --timeout` 是否有效、
-路径投递的 skill 能否被 codex 正常加载、以及执行器会不会因为 `implement` 的自审指令
-而多烧一轮。这三个答案决定 P3 要不要做、以及要不要 fork。
+先提交主仓库的改动（新流程、watcher、workspace 修复），再 `/reload` 让 watcher 生效。
+然后用**第二张票**做一次全自动链路真跑：dispatch 之后不动键盘，验证
+wait 信号 → harvest → review → pi 提交 一路自己走完。票的内容从 P2 里挑一个小的，
+或由用户指定。

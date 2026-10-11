@@ -46,7 +46,8 @@ determinism, and it did the opposite:
 
 The upstream `implement` skill is not named at all. Five of its six instructions
 are covered here more reliably — the brief carries the ticket, the task says to
-commit, and the contract makes the executor report test numbers it measured. The
+leave the change uncommitted, and the contract makes the executor report test
+numbers it measured. The
 sixth is its closing step invoking the upstream review skill, which is exactly the
 self-review that the cross-harness review exists to avoid.
 
@@ -105,10 +106,12 @@ fleet's run directories, and `FleetDispatch` adds both to the project's
 Every job gets one task text and one brief file, and nothing else. The task
 carries the rules that a mistake would cost a worktree to learn:
 
-- Commit to the current branch. Never `git stash`, `git commit --amend`, or a
-  force push. `refs/stash` is shared by every worktree.
+- Do not commit: leave the change in the worktree. The orchestrator stages it, a
+  second harness reviews it, and the orchestrator commits after the review
+  passes.
+- Never `git stash`, `git commit --amend`, or a force push. `refs/stash` is
+  shared by every worktree.
 - Do not close, tick, or edit the tracker ticket.
-- Do not spawn subagents.
 - Write the contract as one JSON object into the file named in the task.
   Nothing else goes in that file.
 - For a review: the two axes, the rule against merging them, and the guard
@@ -124,9 +127,9 @@ Claim one ticket and put an executor to work on it.
 | --- | --- |
 | `ticket` | Absolute path of the ticket file, e.g. `.scratch/login/issues/03-token-refresh.md`. |
 | `worktree` | Absolute path of an existing git worktree. Create it with `herdr worktree create` first. |
-| `role` | `implement` builds the ticket and commits. `review` reviews committed work against `base`. |
+| `role` | `implement` builds the ticket in the worktree, without committing. `review` reviews that uncommitted change against `base`. |
 | `executor` | `codex` or `claude`. Omit it and the tool chooses. |
-| `base` | For `review`: the fixed point to diff against. Required, and normally the branch the build contract reported. |
+| `base` | For `review`: the fixed point the change was built on. Required, and normally the worktree's starting commit. |
 | `fix_round` | Increment after a review found blockers. Capped in code. |
 | `findings` | The blockers a fix round must resolve. |
 | `model` | Passed through to the executor CLI. |

@@ -247,7 +247,7 @@ test("harvest runs while the agent works, and settles only on the contract", asy
 		assert.equal(running.kind === "running" ? running.status : "", "working");
 		assert.equal(runner.get(built.meta.id)?.contractOk, undefined);
 
-		writeFileSync(built.meta.resultPath, JSON.stringify({ ticket: "03", status: "implemented", branch: "fleet/03", commits: [{ sha: "a", subject: "s" }], tests: { command: "npm test", passed: 1, failed: 0 } }), "utf8");
+		writeFileSync(built.meta.resultPath, JSON.stringify({ ticket: "03", status: "implemented", branch: "fleet/03", tests: { command: "npm test", passed: 1, failed: 0 } }), "utf8");
 		const done = await runner.harvest(built.meta.id);
 		assert.equal(done.kind, "complete");
 		assert.equal(runner.get(built.meta.id)?.contractOk, true);
@@ -265,8 +265,8 @@ test("a zero exit with a broken contract is contract_failed, never complete", as
 		assert.equal(built.ok, true, built.ok ? "" : built.error);
 		if (!built.ok) return;
 
-		// Implemented with zero commits, and answering another ticket: two faults.
-		writeFileSync(built.meta.resultPath, JSON.stringify({ ticket: "#99", status: "implemented", branch: "b", commits: [], tests: { command: "x", passed: 1, failed: 0 } }), "utf8");
+		// Answering another ticket is one fault, whatever else the contract carries.
+		writeFileSync(built.meta.resultPath, JSON.stringify({ ticket: "#99", status: "implemented", branch: "b", tests: { command: "x", passed: 1, failed: 0 } }), "utf8");
 		const first = await runner.harvest(built.meta.id);
 		assert.equal(first.kind, "contract_failed");
 		assert.match(first.kind === "contract_failed" ? first.error : "", /is not the ticket this job was dispatched for/);
@@ -411,7 +411,7 @@ test("cleanup refuses an unsettled job and closes a settled one, once", async ()
 		assert.equal(refused.ok, false);
 		assert.match(refused.error ?? "", /not settled/);
 
-		writeFileSync(built.meta.resultPath, JSON.stringify({ ticket: "03", status: "implemented", branch: "fleet/03", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } }), "utf8");
+		writeFileSync(built.meta.resultPath, JSON.stringify({ ticket: "03", status: "implemented", branch: "fleet/03", tests: { command: "x", passed: 1, failed: 0 } }), "utf8");
 		await runner.harvest(built.meta.id);
 
 		assert.equal((await runner.closeTab(built.meta.id)).ok, true);

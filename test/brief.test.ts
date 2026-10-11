@@ -42,8 +42,8 @@ test("the review method travels with the task, so it does not depend on the exec
 	// The anti-recursion guard upstream has not shipped. Both of its installs run
 	// the axes in sub-agents, and neither forbids them from spawning more.
 	assert.match(text, /Do not invoke your harness's review command or spawn additional agents/);
-	assert.match(text, /Review committed work only/);
-	assert.match(text, /git diff fleet\/03\.\.\.HEAD/);
+	assert.match(text, /Review the working tree, not a commit/);
+	assert.match(text, /git diff fleet\/03, over the uncommitted working tree/);
 	assert.match(text, /"spec_found"/);
 	// The upstream implementation skill is not named: its closing step is to invoke
 	// the upstream review inside the run that wrote the code.
@@ -54,7 +54,7 @@ test("the task carries the rules whose breach costs a worktree, not just a retry
 	const text = buildTask({ ...base, role: "implement" });
 	assert.match(text, /Never run git stash, git commit --amend, or any force push/);
 	assert.match(text, /Do not close, tick, or edit the tracker ticket/);
-	assert.match(text, /Do not spawn subagents/);
+	assert.match(text, /Do not commit\. Leave your changes in the worktree/);
 });
 
 test("an implement job is told not to review its own work, because another harness will", () => {
@@ -69,8 +69,8 @@ test("an implement job is told not to review its own work, because another harne
 test("a review job carries the anti-recursion guard upstream does not ship", () => {
 	const text = buildTask({ ...base, role: "review", base: "fleet/03" });
 	assert.match(text, /Do not invoke your harness's review command or spawn additional agents/);
-	assert.match(text, /Review committed work only/);
-	assert.match(text, /git diff fleet\/03\.\.\.HEAD/);
+	assert.match(text, /Review the working tree, not a commit/);
+	assert.match(text, /git diff fleet\/03, over the uncommitted working tree/);
 	assert.match(text, /"spec_found"/);
 	assert.equal(buildTask({ ...base, role: "review" }).includes("Do not run a code review yourself"), false);
 });
@@ -99,7 +99,8 @@ test("a fix-round brief names the findings it must resolve", () => {
 test("the two roles get different schemas, and the implement schema has no format keyword", () => {
 	const implement = buildTask({ ...base, role: "implement" });
 	const review = buildTask({ ...base, role: "review" });
-	assert.match(implement, /"commits"/);
+	// An implement job does not commit, so the contract has no commits to report.
+	assert.equal(implement.includes('"commits"'), false);
 	assert.equal(implement.includes("spec_found"), false);
 	assert.match(review, /"worst_issue"/);
 	// claude treats `format` as an annotation, so a schema carrying one would be

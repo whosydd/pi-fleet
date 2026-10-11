@@ -16,8 +16,10 @@ Four tools do the mechanical work: `FleetDispatch`, `FleetHarvest`,
 You do not write the ticket's code. You do not run its tests. The executor does
 that in its own worktree, with its own tools and its own account.
 
-You own three things: what to dispatch, whether the contract passes, and the
-ticket's `Status:` line.
+You own four things: what to dispatch, whether the contract passes, the ticket's
+`Status:` line, and the commit. The executor never commits: you stage its
+changes, a second harness reviews them, and you commit only after that review
+passes.
 
 ## Before the first dispatch
 
@@ -98,22 +100,33 @@ Call `FleetHarvest` with the job id. Act on the outcome:
 - `failed`: read the run directory. Report the executor's own reason.
 - `contract_complete`: go to step 5.
 
-### 5. Close the ticket
+### 5. Stage the build and dispatch the review
 
-Read the contract. Check that the branch and the commits exist. Run
-`git -C <worktree> log --oneline <base>..<branch>` to see them.
+The implement job does not commit, so the work sits in the worktree as
+uncommitted changes. Stage them:
 
-Then set the ticket's `Status:` line to `done`. Record the branch in the ticket.
-You own this line; the executor never touches it.
+    git -C <worktree> add -A
 
-### 6. Dispatch the review
+`git diff` cannot show a new file that was never staged, and the review reads
+`git diff`. Then check that the worktree carries work at all:
 
-Call `FleetDispatch` again with these arguments:
+    git -C <worktree> status --short
+
+An implement contract with an empty worktree is not an implemented ticket,
+whatever its `status` field says.
+
+Record the branch in the ticket, and set its `Status:` line back to
+`ready-for-agent`. The review job claims the ticket from that line, and a
+`claimed` ticket cannot be dispatched again. You own this line; the executor
+never touches it.
+
+Then call `FleetDispatch` with these arguments:
 
 - `ticket`: the same ticket file.
 - `worktree`: the same worktree.
 - `role`: `review`.
-- `base`: the branch from the build contract.
+- `base`: the point the work was built on. Run `git -C <worktree> rev-parse HEAD`.
+  Nobody has committed since the worktree was cut, so this is the branch tip.
 
 Omit `executor`. The tool picks the harness that did not write the code.
 
@@ -121,26 +134,40 @@ The review reports two axes. Standards asks whether the code follows this
 repository's rules. Spec asks whether the code does what the ticket asked. Keep
 the axes apart in your own report.
 
-### 7. Act on the findings
+### 6. Act on the findings
 
 Read the findings. A finding earns a fix round only when it blocks merging. A
 style or preference finding does not.
 
-- No blocking finding: the ticket is done. Report the two axes and stop.
-- A blocking finding, and the fix round cap is not reached: call `FleetDispatch`
-  with `role: implement`, `fix_round` increased by one, and `findings` set to the
-  blocking findings. Then repeat from step 4.
+- No blocking finding: commit the work yourself, then close the ticket.
+
+      git -C <worktree> add -A
+      git -C <worktree> commit -m "<type>(<scope>): <subject>"
+
+  The subject is the ticket's title. The type and the scope follow this
+  repository's commit convention. Record the branch and the commit sha in the
+  ticket, set its `Status:` line to `done`, report the two axes, and stop.
+
+- A blocking finding, and the fix round cap is not reached: set the ticket's
+  `Status:` line back to `ready-for-agent`, then call `FleetDispatch` with
+  `role: implement`, `fix_round` increased by one, and `findings` set to the
+  blocking findings. A fix round changes the same uncommitted working tree. Then
+  repeat from step 4.
+
 - A blocking finding, and the cap is reached: stop and tell the user. Name the
   worst finding. Do not dispatch another round.
 
-### 8. Clean up
+### 7. Clean up
 
-After the last harvest of a run, call `FleetCleanup` with `all: true`. Read the
-pane's output and the file changes first. The run directory keeps every log, so
-a closed tab loses no evidence.
+After the last harvest of a run, call `FleetCleanup` with `all: true`. Commit
+first: cleanup closes the tab, and an uncommitted worktree holds the only copy
+of the work. Read the pane's output and the file changes before that. The run
+directory keeps every log, so a closed tab loses no evidence.
 
 ## Rules that hold at every step
 
+- The executor never commits. You stage the change and commit it after the
+  review passes. An uncommitted worktree holds the only copy of the work.
 - One ticket, one job, one pane. Never dispatch two builds for one ticket.
 - The contract is the only success signal. A zero exit with a broken contract is
   `contract_failed`.

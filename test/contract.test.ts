@@ -6,7 +6,6 @@ const implementContract = {
 	ticket: "42",
 	status: "implemented",
 	branch: "fleet/42-login-form",
-	commits: [{ sha: "abc1234", subject: "feat: login form" }],
 	tests: { command: "npm test", passed: 12, failed: 0 },
 };
 
@@ -23,19 +22,18 @@ test("implement contract: valid passes", () => {
 test("implement contract: each required field reports itself", () => {
 	assert.match(validateContract("implement", { ...implementContract, branch: "" }).error!, /branch/);
 	assert.match(validateContract("implement", { ...implementContract, status: "done" }).error!, /status/);
-	const missing = { ticket: "42", status: "implemented", branch: "b", tests: { command: "x", passed: 1, failed: 0 } };
-	assert.match(validateContract("implement", missing).error!, /commits/);
+	const missing = { ticket: "42", status: "implemented", branch: "b" };
+	assert.match(validateContract("implement", missing).error!, /tests/);
 });
 
-test("implement contract: implemented with zero commits is refused", () => {
+test("implement contract: a commits field is refused, because an implement job does not commit", () => {
 	const result = validateContract("implement", { ...implementContract, commits: [] });
-	assert.match(result.error!, /implemented requires at least one commit/);
+	assert.match(result.error!, /does not commit/);
 });
 
-test("implement contract: blocked and failed statuses may carry zero commits", () => {
+test("implement contract: blocked and failed are valid statuses too", () => {
 	for (const status of ["blocked", "failed"]) {
-		const result = validateContract("implement", { ...implementContract, status, commits: [] });
-		assert.deepEqual(result, { ok: true });
+		assert.deepEqual(validateContract("implement", { ...implementContract, status }), { ok: true });
 	}
 });
 
@@ -106,7 +104,7 @@ test("claude stdout: a refused call reports the refusal, not the missing field",
 });
 
 test("a contract that answers another ticket fails, and a slug or a # is the same ticket", () => {
-	const good = { ticket: "23-gitignore", status: "implemented", branch: "fleet/23", commits: [{ sha: "a", subject: "s" }], tests: { command: "x", passed: 1, failed: 0 } };
+	const good = { ticket: "23-gitignore", status: "implemented", branch: "fleet/23", tests: { command: "x", passed: 1, failed: 0 } };
 	assert.equal(validateContract("implement", good, "23-gitignore").ok, true);
 	assert.equal(validateContract("implement", { ...good, ticket: "#23" }, "23-gitignore").ok, true);
 	assert.equal(validateContract("implement", { ...good, ticket: "23" }, "23").ok, true);

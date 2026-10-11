@@ -28,15 +28,6 @@ export const IMPLEMENT_SCHEMA = {
 		ticket: { type: "string" },
 		status: { type: "string", enum: ["implemented", "blocked", "failed"] },
 		branch: { type: "string" },
-		commits: {
-			type: "array",
-			items: {
-				type: "object",
-				properties: { sha: { type: "string" }, subject: { type: "string" } },
-				required: ["sha", "subject"],
-				additionalProperties: false,
-			},
-		},
 		tests: {
 			type: "object",
 			properties: {
@@ -50,7 +41,7 @@ export const IMPLEMENT_SCHEMA = {
 		blocked_reason: { type: "string" },
 		notes: { type: "string" },
 	},
-	required: ["ticket", "status", "branch", "commits", "tests"],
+	required: ["ticket", "status", "branch", "tests"],
 	additionalProperties: false,
 } as const;
 
@@ -205,19 +196,9 @@ export function validateContract(role: FleetRole, value: unknown, expectedTicket
 		if (!["implemented", "blocked", "failed"].includes(root.status as string)) {
 			return { ok: false, error: `result.status: must be implemented|blocked|failed, got "${String(root.status)}"` };
 		}
-		const commits = checkArray(root.commits, "result.commits");
-		if (typeof commits === "string") return { ok: false, error: commits };
-		// An implement job that claims "implemented" with zero commits is not
-		// implemented: the contract must name the work, or the status must say
-		// blocked or failed.
-		if (root.status === "implemented" && commits.length === 0) {
-			return { ok: false, error: "result.commits: status implemented requires at least one commit; report status blocked or failed if nothing landed" };
-		}
-		for (const [index, commit] of commits.entries()) {
-			const record = checkObject(commit, `result.commits[${index}]`);
-			if (typeof record === "string") return { ok: false, error: record };
-			const commitError = firstError(checkString(record.sha, `result.commits[${index}].sha`), checkString(record.subject, `result.commits[${index}].subject`));
-			if (commitError) return { ok: false, error: commitError };
+		const commits = root.commits;
+		if (commits !== undefined) {
+			return { ok: false, error: "result.commits: an implement job does not commit; leave the change in the worktree and omit this field" };
 		}
 		const tests = checkObject(root.tests, "result.tests");
 		if (typeof tests === "string") return { ok: false, error: tests };

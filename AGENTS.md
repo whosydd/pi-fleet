@@ -41,3 +41,17 @@ There is no `skills/planning/` and no `skills/execution/`. The planning set is i
 - **The upstream skills do not fully cover the loop.** `implement` self-reviews and `code-review` can recurse; `brief.ts` carries the two lines that stop both. Do not remove them.
 - **The orchestrator never stashes, amends, or force-pushes.** `gitguard.ts` blocks them in `tool_call` and `user_bash`; `PI_FLEET_GIT_GUARD=off` is the only escape. The upstream guardrail skill blocks a different set and only inside Claude Code.
 - **A pane stays open until cleanup says so.** Only tabs this package created are closed, and only for settled jobs.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles keep their default strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
