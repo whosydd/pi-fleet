@@ -234,18 +234,15 @@ export interface TabOccupancy {
 	review: string[];
 }
 
-/** When a tab holds this many executors, open a new tab instead of splitting again. */
-export const TAB_FANOUT_LIMIT = 3;
-
 /**
  * Place one job in a ticket's tab.
  *
- * The tab's first pane hosts the first executor, so the left column is
- * executors and each later one stacks downward beside the same worktree. A
- * reviewer splits right off the first executor and then stays put: fix rounds
- * reuse that pane, so a human reads the review and the re-review in one place
- * instead of chasing new tabs. Past `TAB_FANOUT_LIMIT` executors the column
- * stops growing and a new tab opens.
+ * One executor pane per ticket. The first implement job opens the tab and takes
+ * its first pane. A fix round continues in that same pane, so the executor keeps
+ * the context it built the ticket with and no second codex starts for the same
+ * work. A reviewer splits right off that executor and then stays put: a re-review
+ * reuses that pane too, so a human reads the review and the re-review in one
+ * place instead of chasing new tabs.
  *
  * A reviewer with no executor to sit beside opens its own tab: a review of work
  * nobody is watching does not deserve a borrowed column.
@@ -258,8 +255,8 @@ export function planPaneAction(zone: PaneZone, tab: TabOccupancy): PaneAction {
 		if (!anchor) return { kind: "newTab" };
 		return { kind: "split", anchor, direction: "right" };
 	}
-	if (tab.exec.length === 0 || tab.exec.length >= TAB_FANOUT_LIMIT) return { kind: "newTab" };
-	return { kind: "split", anchor: tab.exec.at(-1) ?? "", direction: "down" };
+	const executor = tab.exec[0];
+	return executor ? { kind: "reuse", paneId: executor } : { kind: "newTab" };
 }
 
 /**
@@ -267,14 +264,14 @@ export function planPaneAction(zone: PaneZone, tab: TabOccupancy): PaneAction {
  * placed in it.
  *
  * Reads the registry rather than Herdr: the answer must be the tab this package
- * built, and jobs the human placed by hand are none of its business.
+ * built, and jobs the human placed by hand are none of its business. A fix round
+ * reuses the executor's pane, so several jobs of one ticket name one pane: the
+ * placement decision needs the set of panes, not the list of jobs.
  */
 export function occupancyOf(jobs: JobMeta[], tabId: string): TabOccupancy {
 	const inTab = jobs.filter((job) => job.pane?.tabId === tabId && job.paneClosedAt === undefined);
-	return {
-		exec: inTab.filter((job) => zoneOf(job.role) === "exec").map((job) => job.pane!.paneId),
-		review: inTab.filter((job) => zoneOf(job.role) === "review").map((job) => job.pane!.paneId),
-	};
+	const panes = (zone: PaneZone) => [...new Set(inTab.filter((job) => zoneOf(job.role) === zone).map((job) => job.pane!.paneId))];
+	return { exec: panes("exec"), review: panes("review") };
 }
 
 /** `blocked` means the agent waits on a human at an approval or question. */

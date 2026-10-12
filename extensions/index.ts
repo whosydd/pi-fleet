@@ -52,7 +52,7 @@ const DISPATCH_DESCRIPTION = `Hand one ticket to one executor and get a job id b
 
 An implement job leaves its changes uncommitted. The review job reads that working tree, and you commit only after the review passes.
 
-What the tool does for you: claims the ticket (rewrites its Status line to "claimed"), creates the run directory, writes the brief and the JSON schema, opens or reuses the ticket's Herdr tab in the worktree's own workspace, starts the executor's own TUI, and delivers the task. When Herdr has closed that workspace — it closes an empty worktree workspace with the last tab cleanup closes — the tool reopens it instead of running the executor in the orchestrator's workspace. What it will not do: create the worktree, pick the executor's tools, set its permissions, or pay its bill.
+What the tool does for you: claims the ticket (rewrites its Status line to "claimed"), creates the run directory, writes the brief and the JSON schema, opens the ticket's Herdr tab in the worktree's own workspace, re-prompts the executor that built the ticket when the job is a fix round, starts the executor's own TUI, and delivers the task. When Herdr has closed that workspace — it closes an empty worktree workspace with the last tab cleanup closes — the tool reopens it instead of running the executor in the orchestrator's workspace. What it will not do: create the worktree, pick the executor's tools, set its permissions, or pay its bill.
 
 The brief is what the executor sees — it never sees this conversation. Copy the ticket's text in; the ticket file itself stays out of the worktree.
 

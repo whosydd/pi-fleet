@@ -153,7 +153,8 @@ style or preference finding does not.
 - A blocking finding, and the fix round cap is not reached: set the ticket's
   `Status:` line back to `ready-for-agent`, then call `FleetDispatch` with
   `role: implement`, `fix_round` increased by one, and `findings` set to the
-  blocking findings. A fix round changes the same uncommitted working tree. Then
+  blocking findings. The fix round re-prompts the executor that built the
+  ticket, in its own pane, and changes the same uncommitted working tree. Then
   repeat from step 4.
 
 - A blocking finding, and the cap is reached: stop and tell the user. Name the

@@ -182,6 +182,33 @@ test("a worktree whose workspace Herdr closed is reopened, and the pane lands th
 	}
 });
 
+test("a fix round continues in the executor that built the ticket", async () => {
+	const h = harness({});
+	try {
+		const runner = new Runner(h.settings);
+		claimTicket(h.ticketPath);
+		const built = await runner.dispatch(dispatchInput(h));
+		assert.equal(built.ok, true, built.ok ? "" : built.error);
+		if (!built.ok) return;
+
+		claimTicket(h.ticketPath);
+		const fixed = await runner.dispatch(dispatchInput(h, { fixRound: 1, findings: ["standards: the reason is not where a reader looks"] }));
+		assert.equal(fixed.ok, true, fixed.ok ? "" : fixed.error);
+		if (!fixed.ok) return;
+
+		// Same pane, same agent: a fix round re-prompts the codex that built the
+		// ticket instead of starting a second one that must explore again.
+		assert.equal(fixed.meta.pane?.paneId, built.meta.pane?.paneId);
+		assert.equal(fixed.meta.pane?.agentName, built.meta.pane?.agentName);
+		const calls = h.logCalls();
+		assert.equal(calls.filter((call) => call[0] === "agent" && call[1] === "start").length, 1, "one codex, re-prompted");
+		assert.equal(calls.filter((call) => call[0] === "pane" && call[1] === "split").length, 0);
+		assert.equal(calls.filter((call) => call[0] === "tab" && call[1] === "create").length, 1);
+	} finally {
+		cleanup(h);
+	}
+});
+
 test("a review reuses the pane the first review used, and never a second tab", async () => {
 	const h = harness({});
 	try {

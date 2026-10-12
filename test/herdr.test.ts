@@ -14,7 +14,6 @@ import {
 	workspaceForWorktree,
 	worktreeOpenArgv,
 	zoneOf,
-	TAB_FANOUT_LIMIT,
 } from "../extensions/lib/herdr.ts";
 import type { JobMeta } from "../extensions/lib/types.ts";
 
@@ -80,12 +79,11 @@ test("a fix round is execution work, not a review", () => {
 	assert.equal(zoneOf("review"), "review");
 });
 
-test("pane placement: first executor takes the tab, the next stack downward", () => {
+test("one executor pane per ticket: the first job takes the tab, a fix round reuses it", () => {
 	assert.deepEqual(planPaneAction("exec", { exec: [], review: [] }), { kind: "newTab" });
-	assert.deepEqual(planPaneAction("exec", { exec: ["w1:p1"], review: [] }), { kind: "split", anchor: "w1:p1", direction: "down" });
-	assert.deepEqual(planPaneAction("exec", { exec: ["w1:p1", "w1:p2"], review: [] }), { kind: "split", anchor: "w1:p2", direction: "down" });
-	// Past the fan-out limit the column stops growing.
-	assert.deepEqual(planPaneAction("exec", { exec: Array.from({ length: TAB_FANOUT_LIMIT }, (_, index) => `w1:p${index + 1}`), review: [] }), { kind: "newTab" });
+	assert.deepEqual(planPaneAction("exec", { exec: ["w1:p1"], review: [] }), { kind: "reuse", paneId: "w1:p1" });
+	// The pane to continue in is the first executor, whatever else a tab accumulated.
+	assert.deepEqual(planPaneAction("exec", { exec: ["w1:p1", "w1:p2"], review: [] }), { kind: "reuse", paneId: "w1:p1" });
 });
 
 test("pane placement: a reviewer sits right of the first executor, and then stays put", () => {
@@ -112,4 +110,8 @@ test("occupancy counts only the open panes this package placed in that tab", () 
 	assert.deepEqual(occupancyOf(jobs, "w1:t1"), { exec: ["w1:p1"], review: ["w1:p9"] });
 	assert.deepEqual(occupancyOf(jobs, "w1:t2"), { exec: ["w1:p3"], review: [] });
 	assert.deepEqual(occupancyOf(jobs, "w1:t9"), { exec: [], review: [] });
+	// A fix round reuses the executor's pane, so several jobs of one ticket name
+	// one pane, and the placement decision wants the pane once.
+	const reused = [...jobs, job({ pane: { workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p1", agentName: "a" } })];
+	assert.deepEqual(occupancyOf(reused, "w1:t1"), { exec: ["w1:p1"], review: ["w1:p9"] });
 });
