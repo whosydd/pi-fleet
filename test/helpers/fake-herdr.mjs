@@ -54,6 +54,8 @@ if (group === "workspace" && verb === "list") {
 	emit({ submitted: true });
 } else if (group === "tab" && verb === "close") {
 	emit({ closed: true });
+} else if (group === "tab" && verb === "rename") {
+	emit({ renamed: true });
 } else if (group === "notification") {
 	emit({ shown: true });
 } else {

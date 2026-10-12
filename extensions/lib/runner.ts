@@ -43,6 +43,7 @@ import {
 	tabCloseArgv,
 	tabCreateArgv,
 	tabLabel,
+	tabRenameArgv,
 	workspaceForWorktree,
 	workspaceListArgv,
 	worktreeOpenArgv,
@@ -264,6 +265,10 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 		}
 
 		const name = existingAgent ?? agentName(meta.role, meta.ticket);
+		// The tab belongs to the ticket, and the pane may have come from a tab that
+		// carried someone else's name: herdr's own first tab is labelled `1`. Naming
+		// it here covers every path, and a tab created above keeps its label.
+		await this.#call(tabRenameArgv(tabId, label), CALL_MS);
 		if (!existingAgent) {
 			const started = await this.#call(agentStartArgv(name, meta.executor, paneId, meta.model), AGENT_START_CALL_MS);
 			if (!started.ok) {

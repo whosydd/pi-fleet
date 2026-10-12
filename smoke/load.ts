@@ -43,6 +43,12 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeDecision> {
 		noThemes: true,
 		noContextFiles: true,
 	});
+	// A job may still be on disk: the smoke can run while an executor works. The
+	// extension adopts unsettled jobs when a session starts and opens a `herdr agent
+	// wait` for each one, and a live child process keeps this headless session from
+	// exiting. The smoke checks registration, not the watcher, so it stays off — set
+	// before the reload, which is where the extension reads its settings.
+	process.env.PI_FLEET_AUTO_CONTINUE = "off";
 	await loader.reload();
 
 	const loaded = loader.getExtensions();

@@ -129,8 +129,10 @@ test("dispatch builds the run directory, opens a pane, and starts the executor",
 		assert.equal(meta.fixRound, 0);
 
 		const calls = h.logCalls();
-		assert.deepEqual(calls.map((call) => call.slice(0, 2).join(" ")), ["workspace list", "pane list", "agent start", "agent prompt"]);
-		assert.match(calls[3]!.join(" "), /\/runs\/job_03_/);
+		assert.deepEqual(calls.map((call) => call.slice(0, 2).join(" ")), ["workspace list", "pane list", "tab rename", "agent start", "agent prompt"]);
+		// The tab herdr opened is renamed to the ticket, not left as `1`.
+		assert.deepEqual(calls.find((call) => call[0] === "tab" && call[1] === "rename")?.slice(0, 4), ["tab", "rename", "wF:t1", "03 Token refresh"]);
+		assert.match(calls.find((call) => call[0] === "agent" && call[1] === "prompt")?.join(" ") ?? "", /\/runs\/job_03_/);
 	} finally {
 		cleanup(h);
 	}

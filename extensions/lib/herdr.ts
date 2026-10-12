@@ -87,6 +87,18 @@ export function tabCreateArgv(workspaceId: string, label: string, cwd: string): 
 	return ["tab", "create", "--workspace", workspaceId, "--label", label, "--cwd", cwd, "--no-focus"];
 }
 
+/**
+ * `herdr tab rename` argv.
+ *
+ * A tab this package reuses — the one `herdr worktree create` opened, or the
+ * ticket's own tab on a fix round — carries whatever label it was born with,
+ * which for herdr's own first tab is `1`. Renaming it to the ticket is what
+ * keeps the sidebar readable whichever way the pane was found.
+ */
+export function tabRenameArgv(tabId: string, label: string): string[] {
+	return ["tab", "rename", tabId, label];
+}
+
 export function tabCloseArgv(tabId: string): string[] {
 	return ["tab", "close", tabId];
 }

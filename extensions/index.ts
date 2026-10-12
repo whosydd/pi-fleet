@@ -198,14 +198,32 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			// verdict is already read, and a second wake-up would be a false alarm.
 			if (!meta) return;
 			stopWatching(id);
-			pi.sendUserMessage(wakeMessage(meta, report.kind), { deliverAs: "followUp" });
+			try {
+				pi.sendUserMessage(wakeMessage(meta, report.kind), { deliverAs: "followUp" });
+			} catch {
+				// The session this watcher belonged to is gone (`session_shutdown` drops the
+				// watchers, but a wake-up can still race a reload). Losing the message is
+				// better than throwing inside an unattended async loop.
+				return;
+			}
 			return;
 		}
 	}
 
-	// A job dispatched by an earlier session is still on disk. Adopt it, so a
-	// reload or a restart resumes the loop instead of stranding the ticket.
-	for (const job of runner.all()) watchJob(job);
+	// A job dispatched by an earlier session is still on disk. Adopt it when a
+	// session starts, so a reload or a restart resumes the loop instead of
+	// stranding the ticket; the shutdown handler drops what it leaves behind.
+	pi.on("session_start", () => {
+		for (const job of runner.all()) watchJob(job);
+	});
+
+	pi.on("session_shutdown", () => {
+		// This instance is giving up the session, and the `pi` it captured goes stale
+		// with it: a wake-up after that throws. Dropping the watchers is what stops the
+		// loop from touching a context that is no longer there.
+		watched.clear();
+		nudges.clear();
+	});
 
 	// -----------------------------------------------------------------------
 	// Dispatch
