@@ -25,9 +25,10 @@ passes.
 
 Run these steps once for each repository.
 
-1. Run `/fleet-setup`. It installs the upstream skills into this project so the
-   planning skills work, and it filters the execution skills out. Global settings
-   stay untouched. Run `/reload` afterwards so the session picks them up.
+1. Run `/matt-pocock-skills-bootstrap`. It installs the upstream skills into this
+   project so the planning skills work, and it filters the execution skills out.
+   Global settings stay untouched. Run `/reload` afterwards so the session picks
+   them up.
 2. Run the `setup-matt-pocock-skills` skill. Choose **Local markdown** as the
    issue tracker. It writes `docs/agents/issue-tracker.md`.
 3. Check that this session runs inside Herdr. Run `test "${HERDR_ENV:-}" = 1`.
@@ -38,15 +39,15 @@ Run these steps once for each repository.
    workspace, which `FleetDispatch` needs. Herdr closes that workspace when its
    last tab closes, and cleanup closes exactly that tab. Dispatch reopens the
    workspace on the next job, so a reused worktree needs no manual step.
-5. Re-run `/fleet-setup` after a `pi update`. `pi update` is the only thing that
-   moves the upstream clone, and upstream moves skills between buckets. A
-   planning path can then match no file, which loads no skill and reports
-   nothing. When a skill you expect is missing from the `/skill:` list, upstream
-   moved it. Edit `skills/manifest.json` in the pi-fleet package, then re-run
-   `/fleet-setup`.
+5. Re-run `/matt-pocock-skills-bootstrap` after a `pi update`. `pi update` is the
+   only thing that moves the upstream clone, and upstream moves skills between
+   buckets. A planning path can then match no file, which loads no skill and
+   reports nothing. When a skill you expect is missing from the `/skill:` list,
+   upstream moved it. Edit `skills/manifest.json` in the pi-fleet package, then
+   re-run `/matt-pocock-skills-bootstrap`.
 
-If `/fleet-setup` is not available, this project does not have the pi-fleet
-package. Install it first.
+If `/matt-pocock-skills-bootstrap` is not available, this project does not have
+the pi-fleet package. Install it first.
 
 ## The loop
 
@@ -193,8 +194,8 @@ workspace.
 - Do not implement the ticket yourself when an executor is slow. Wait, or answer
   the executor in its pane.
 - Never load `code-review`, `tdd`, or any other execution skill yourself. Those
-  belong to the executor. `/fleet-setup` keeps them out of this context on
-  purpose.
+  belong to the executor. `/matt-pocock-skills-bootstrap` keeps them out of this
+  context on purpose.
 
 ## When the user asks for a status
 

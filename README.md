@@ -12,11 +12,19 @@ into the main checkout and removes the worktree.
 pi install git:github.com/whosydd/pi-fleet
 ```
 
-Then, in each project you want to use it in:
+Then, in each project you want to use it in, these four steps are the whole setup.
+Steps 1 and 2 are the bootstrap; steps 3 and 4 are the repository's own choices.
 
-```text
-/fleet-setup
-```
+1. `/matt-pocock-skills-bootstrap` — installs the upstream planning skills into
+   this project, filtered. It is the only step that touches a file.
+2. `/reload` — pi read this project's settings at startup, so the new skills appear
+   after a reload and not before.
+3. `setup-matt-pocock-skills` — the upstream skill that picks the issue tracker,
+   writes `docs/agents/*.md`, and creates the triage labels. Step 1 is what makes
+   it loadable. Choose **Local markdown**: that is the medium this release reads
+   (see [The ticket tracker](#the-ticket-tracker)).
+4. `herdr worktree create` — every job runs in its own worktree, and Herdr gives
+   that worktree its own workspace.
 
 Requires pi `>= 1.0.0`, the `codex` and/or `claude` CLI on PATH, and Herdr.
 
@@ -27,7 +35,7 @@ engineering skills are neither vendored nor copied.
 
 | set | who uses it | where it comes from |
 | --- | --- | --- |
-| **planning** — grilling, to-spec, to-tickets, triage, domain-modeling, tracker setup | pi | `/fleet-setup` installs the upstream repository into the project behind a settings filter, so these **track upstream** |
+| **planning** — grilling, to-spec, to-tickets, triage, domain-modeling, tracker setup | pi | `/matt-pocock-skills-bootstrap` installs the upstream repository into the project behind a settings filter, so these **track upstream** |
 | **execution** — tdd, code-review | the executors | the executor's own harness install. Both Codex and Claude already have these. The task text names them |
 | **fleet** | pi | this package |
 
@@ -70,7 +78,7 @@ repository are installed, the vendored copy is discovered first and wins the nam
 collision — with a warning, but it also means the project silently runs a pinned
 copy and never sees upstream's latest.
 
-## `/fleet-setup`
+## `/matt-pocock-skills-bootstrap`
 
 ```bash
 npm run install-planning -- --target <project>   # what the command runs
@@ -199,8 +207,8 @@ to the job.
 ## Updating upstream
 
 `skills/manifest.json` holds two lists of upstream names: the `planning` set,
-which `/fleet-setup` installs into the project, and the `execution` set, which
-the task text names. The `excluded` map records the upstream skills this package
+which `/matt-pocock-skills-bootstrap` installs into the project, and the
+`execution` set, which the task text names. The `excluded` map records the upstream skills this package
 deliberately does not use, and why. A `$`-prefixed key holds a shared
 explanation, and a `$`-prefixed value is a pointer to another key in that same
 map.
@@ -213,7 +221,8 @@ reports no diagnostic.
 No check runs on a schedule. A check that runs before the update would report a
 state no install is in, because an unfetched rename breaks nothing. The drift
 surfaces at the update instead, as a skill missing from the `/skill:` list. When
-you see that, edit the path in `skills/manifest.json` and re-run `/fleet-setup`.
+you see that, edit the path in `skills/manifest.json` and re-run
+`/matt-pocock-skills-bootstrap`.
 
 `npm run check-planning` keeps the offline half honest: the filter committed in
 `.pi/settings.json` matches the manifest.
@@ -241,7 +250,7 @@ npm run check             # typecheck, tests, load check, planning filter
 npm run test              # node --test test/*.test.ts
 npm run smoke             # load the package through pi's own loader
 npm run check-planning    # does .pi/settings.json still match the manifest?
-npm run install-planning  # what /fleet-setup runs
+npm run install-planning  # what /matt-pocock-skills-bootstrap runs
 ```
 
 Tests never call a model and never hit the network. The Herdr CLI is replaced by

@@ -47,7 +47,8 @@
 一个长期为红、却不对应任何实际损坏的 CI，比没有 CI 更糟：它训练人忽略红。
 
 保留下来的只有离线的 `npm run check-planning`。它比对**本仓库自己的两个文件**
-（`.pi/settings.json` 与 manifest），抓的是"改了 manifest 但忘了重跑 `/fleet-setup`"。
+（`.pi/settings.json` 与 manifest），抓的是"改了 manifest 但忘了重跑
+`/matt-pocock-skills-bootstrap`"。
 
 ## 关键转折：本包不再发布任何上游 skill
 
@@ -179,8 +180,9 @@ commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程�
 ## P0 — 首次真跑
 
 - [x] **T1 一个 ticket、codex、pane**：完成，两半都过校验（详见上节）。
-  `/fleet-setup` → `setup-matt-pocock-skills` → `herdr worktree create` →
-  `FleetDispatch` → executor 写 `result.json` → `FleetHarvest` 过校验。
+  `/matt-pocock-skills-bootstrap` → `setup-matt-pocock-skills` →
+  `herdr worktree create` → `FleetDispatch` → executor 写 `result.json` →
+  `FleetHarvest` 过校验。
 - [x] **T2 同一个 ticket claude review**：完成，还多跑了一轮 fix 后的复审。两轴分开报，
   claude 没有递归 spawn（它甚至自己重建代码验证测试断言是否为真）。
 - [x] **T3 并发 claim / T4 坏 contract / T5 idle 宽限**：2026-10-12 真跑完成，三条全部
@@ -199,7 +201,8 @@ commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程�
 
 ## P2 — 明确留到后面的
 
-- [ ] **只想要 matt skills、不想要 fleet 的项目**：现在 `/fleet-setup` 依赖本包已装。
+- [ ] **只想要 matt skills、不想要 fleet 的项目**：现在
+  `/matt-pocock-skills-bootstrap` 依赖本包已装。
   脚本仍可单独跑（`node <pkg>/scripts/install-planning.mjs`），但没有一条不装本包的路。
 - [ ] **托管 tracker**：现在只支持本地 markdown。claim 要换成一次 API 调用，其余设计不受影响。
 - [ ] **wayfinder**：它的决策 ticket 会调 `research` 与 `prototype`（执行类）。要做就把这两个
@@ -208,7 +211,8 @@ commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程�
   （`TAB_FANOUT_LIMIT` 已就位），收尾顺序需要决定。
 - [x] **`excluded` 里的措辞重复**：已修（ticket `manifest-exclusions/01`，commit `a3e315c`，merge `74d9391`）：26 个非 `$` 条目里重复的解释收成 `$executor-provides`(8)、`$writing-prose`(3)、`$project-scaffold`(2) 三条共享说明。
 - [ ] **`excluded` 是纯文档，无人校验，也没有启用路径**：想启用某个上游 skill 时无需改代码，
-  只需把它从 `excluded` 移到 `planning`，然后重跑 `/fleet-setup`。这条没有待做的活，只在
+  只需把它从 `excluded` 移到 `planning`，然后重跑
+  `/matt-pocock-skills-bootstrap`。这条没有待做的活，只在
   真要放行某个 skill 时才动。
 
 ## P3 — 上游补丁（T1 后的结论）

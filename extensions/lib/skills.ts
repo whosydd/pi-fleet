@@ -3,9 +3,10 @@
  *
  * The list is short on purpose, and the reason is the layout of the whole thing:
  *
- *   - The upstream **planning** skills are not shipped here. `/fleet-setup`
- *     installs the upstream repository into the project behind a settings filter,
- *     so those skills track upstream instead of a pinned copy.
+ *   - The upstream **planning** skills are not shipped here.
+ *     `/matt-pocock-skills-bootstrap` installs the upstream repository into the
+ *     project behind a settings filter, so those skills track upstream instead of
+ *     a pinned copy.
  *   - The upstream **execution** skills are not shipped here either. Codex and
  *     Claude install them on their own machines, and this package names them in
  *     the task text instead of handing over a path. Shipping a second copy made
@@ -14,7 +15,7 @@
  *     skill, and it is the only one the package manifest declares.
  *
  * So there is nothing here to resolve, validate, or hand out. What remains is the
- * one path the `/fleet-setup` command needs: its own.
+ * one path the `/matt-pocock-skills-bootstrap` command needs: its own.
  */
 
 import { dirname, join } from "node:path";

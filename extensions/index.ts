@@ -514,7 +514,8 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	// Setup
 
 	/**
-	 * `/fleet-setup` installs the upstream skills into this project, filtered.
+	 * `/matt-pocock-skills-bootstrap` installs the upstream skills into this
+	 * project, filtered.
 	 *
 	 * It is a command rather than a tool on purpose. The install is a one-time
 	 * project decision with a deterministic answer, and a model turn would only add
@@ -522,7 +523,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	 * same reason: this extension knows where its own package lives, and a template
 	 * would leave the model to find the script.
 	 */
-	pi.registerCommand("fleet-setup", {
+	pi.registerCommand("matt-pocock-skills-bootstrap", {
 		description: "Install the upstream planning skills into this project, filtered, without touching global settings",
 		handler: async (_args, ctx) => {
 			const run = async (extra: string[]) => {
