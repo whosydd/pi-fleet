@@ -86,16 +86,7 @@
 
 ## 已记账、未修（不阻塞 T1）
 
-- [ ] **`smoke/load.ts` 只打印不判定。** 实测：给 `extensions/index.ts` 尾部加一句
-  `throw new Error("BOOM")`，`npm run smoke` 仍退出 0。它唯一设置退出码 1 的地方是
-  "`skills/planning` 或 `skills/execution` 目录存在"，而扩展是否加载、四个工具是否注册、
-  `fleet` skill 是否读进来，全都只是 `console.log`。它 docstring 写着 "Two claims are
-  checked"，实际只检查了半个。
-  另一个毛病：`extension.path.includes("pi-fleet")` 用来认"自己"会认错。那次实测里，
-  本机全局 pi 配置指向的副本先注册成功，把被测入口的加载失败盖住了——所以
-  `active tools` 才全显示 `true`。
-  修法：按传入的 `entry` 路径认自己；加三条断言（本入口的 loader 无错误、四个工具都在
-  `getActiveToolNames()` 里、`fleet` skill 加载成功）。
+- [x] **`smoke/load.ts` 只打印不判定。** 已修（ticket `smoke-load-assertions/01`，commit `5f202eb`+`3977960`，merge `bfb4ccb`）：判定抽成 `extensions/lib/smoke.ts` 的纯函数，入口抛异常、四个工具缺失、`fleet` skill 缺失都退出 1，且按传入的 `entry` 路径认自己。
 - [ ] **`.github/workflows/check.yml` 从未运行。** `git remote` 是空的，仓库没推送过，
   只有一个提交者，所以它今天价值为零，激活条件是推上 GitHub。修完上面那条之后它才有
   实际意义：CI 跑的是新鲜克隆，没有本机全局配置可以掩盖失败。**先做 T1，之后再决定留删。**
@@ -215,11 +206,10 @@ commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程�
   一起放进 planning，或让它走一条独立的 pane。
 - [ ] **多 ticket 并发**：现在一次一 ticket 走完。跨 ticket 并发只需在同一 tab 的 exec 列继续 split
   （`TAB_FANOUT_LIMIT` 已就位），收尾顺序需要决定。
-- [ ] **`excluded` 里的 25 条全是文档，无人校验**：理由写在 `skills/manifest.json`。
-  其中 7 条（`codebase-design`、`diagnosing-bugs`、`improve-codebase-architecture`、`pr`、
-  `prototype`、`research`、`retro`、`wizard`）措辞完全相同，只为满足旧的"清单必须穷尽"
-  检查而存在。那个检查已删，这几条可以合并成一条说明。哪个想启用就改分类并重跑
-  `/fleet-setup`。
+- [x] **`excluded` 里的措辞重复**：已修（ticket `manifest-exclusions/01`，commit `a3e315c`，merge `74d9391`）：26 个非 `$` 条目里重复的解释收成 `$executor-provides`(8)、`$writing-prose`(3)、`$project-scaffold`(2) 三条共享说明。
+- [ ] **`excluded` 是纯文档，无人校验，也没有启用路径**：想启用某个上游 skill 时无需改代码，
+  只需把它从 `excluded` 移到 `planning`，然后重跑 `/fleet-setup`。这条没有待做的活，只在
+  真要放行某个 skill 时才动。
 
 ## P3 — 上游补丁（T1 后的结论）
 
@@ -311,19 +301,23 @@ reviewer 用同一个 probe 在 main 与本 worktree 上对照出来的，不是
 偶发拒单的 provider，救不回持续拒单的。失败合理，但没有假 `complete`——fail-safe 按设计工作。
 另外：tierflow 的配额再吃紧一次（同日第二次），换 provider 的事已记在下面「tierflow 中转诊断」节。
 
-## ticket 02 遗留的三条非阻塞观察（2026-10-12）
+## ticket 02 遗留的三条非阻塞观察（2026-10-12，已修）
 
 第三轮 review 的 spec 轴全绿（reviewer 在临时副本里破坏验证过 guard：把句子内联回条目
 会失败、悬空指针会失败、改写共享解释会通过），standards 轴只剩三条风格项，不足一轮
-fix round（cap 也已用满，`PI_FLEET_MAX_FIX_ROUND=2`）：
+fix round（cap 也已用满，`PI_FLEET_MAX_FIX_ROUND=2`）。三条已在主 checkout 直接清掉（commit
+`5c27f53`），不走 fleet：改动只有注释、AGENTS.md 一句话和一处取值方式，dispatch 的代价
+大于收益。
 
-- `test/skills.test.ts:87` 的新 guard 没有"为什么存在"的注释，而该文件其他非平凡
+- [x] `test/skills.test.ts:87` 的新 guard 没有"为什么存在"的注释，而该文件其他非平凡
 guard 都有（如 `:27-31`、`:42-44`）。后面改动最容易撤销的两个选择——在原始文件文本
-里数出现次数、对两侧排序——正好是没被解释的那两个。
-- `AGENTS.md:18` 把 `$` 约定限定在 `excluded` 里，而票自己引用的先例是顶层键
+里数出现次数、对两侧排序——正好是没被解释的那两个。已补注释，逐条说明这两个选择。
+- [x] `AGENTS.md:18` 把 `$` 约定限定在 `excluded` 里，而票自己引用的先例是顶层键
 （`skills/manifest.json:6` 的 `$planning`、`:19` 的 `$execution`），这一行仍未提到。
-- 同一个值在测试里有三种取法：`sharedReasons`、`exclusionReason`（`:83` 定义）、
-以及新 guard 里的 `manifest.excluded[key]`。
+已改成：`$` 键一律是共享说明，顶层解释整张列表，`excluded` 里的条目用 $ 键当理由。
+- [x] 同一个值在测试里有三种取法：`sharedReasons`、`exclusionReason`（`:83` 定义）、
+以及新 guard 里的 `manifest.excluded[key]`。新 guard 改成 `exclusionReason(key)`，
+现在取同一个值只有一条路。
 
 ## tierflow 中转诊断（2026-10-12）
 
