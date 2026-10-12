@@ -23,10 +23,10 @@
 
 | 项 | 处理 |
 | --- | --- |
-| `.fleet/`（旧架构 10 个 run 目录、5 份契约） | 删除 |
+| `.fleet/`（旧架构 10 个 run 目录、5 份 contract） | 删除 |
 | `session.jsonl`（根目录 1.1MB 会话日志） | 删除 |
 | `PI_FLEET_RUNS_DIR` 默认值 | `.fleet/runs` → `.pi/fleet/runs` |
-| run 目录的 gitignore | 重建 `preflight.ts`：派发前把 `.pi/fleet/` 写进项目 `.gitignore` |
+| run 目录的 gitignore | 重建 `preflight.ts`：dispatch 前把 `.pi/fleet/` 写进项目 `.gitignore` |
 | `skills/execution/`（vendored 11 → 3 → **0**） | 整个删除 |
 | `scripts/sync-skills.mjs` | 删除。曾换成 `check-skills.mjs`，后一并删除（理由见下节） |
 | `.github/workflows/sync-skills.yml` | 删除。曾换成 `upstream-drift.yml`，后一并删除 |
@@ -57,31 +57,31 @@
 
 | skill | codex | claude | 结论 |
 | --- | --- | --- | --- |
-| `implement` | `allow_implicit_invocation: false` | `disable-model-invocation: true` | 执行器看不到它 |
-| `tdd`、`code-review` | 模型可自主加载 | 无该标记 | 执行器能自己拿到 |
+| `implement` | `allow_implicit_invocation: false` | `disable-model-invocation: true` | executor 看不到它 |
+| `tdd`、`code-review` | 模型可自主加载 | 无该标记 | executor 能自己拿到 |
 
 于是"给绝对路径"反而制造了新问题：
 
-1. **双份加载。** `tdd`/`code-review` 是模型可自主加载的。我们的任务文本本身就足以触发执行器加载**它自己那份**，而我们又额外塞了路径 → 一个 skill 的两份指令同时进上下文。
+1. **双份加载。** `tdd`/`code-review` 是模型可自主加载的。我们的任务文本本身就足以触发 executor 加载**它自己那份**，而我们又额外塞了路径 → 一个 skill 的两份指令同时进上下文。
 2. **版本不同。** codex 装 1.3.1、claude 装 1.2.3，实测 `code-review` 差 4 处（claude 那份还缺"两个 sub-agent 同时发起"那一句）。
-3. **`implement` 净贡献为零。** 六条指令里五条我们已有更可靠的实现（brief 拷票、契约强制报真实测试数、task 说提交），第六条"自审"正是我们要移除的。
+3. **`implement` 净贡献为零。** 六条指令里五条我们已有更可靠的实现（brief 拷 ticket、contract 强制报真实测试数、task 说 commit），第六条"自审"正是我们要移除的。
 
-**所以最终形态**：本包只发一个自己的 skill（`fleet`）。planning 装上游到项目里（要最新），execution 靠执行器自己的安装（按**名字**引用，不给路径），而真正需要保证的东西——两轴定义、反递归、输出格式——收进 `brief.ts` 的文本里。
+**所以最终形态**：本包只发一个自己的 skill（`fleet`）。planning 装上游到项目里（要最新），execution 靠 executor 自己的安装（按**名字**引用，不给路径），而真正需要保证的东西——两轴定义、反递归、输出格式——收进 `brief.ts` 的文本里。
 
-那三样本来就该是我们的事：上游至今没修反递归（两边装的都是 0 处命中），而上游输出的是散文，不是我们的契约。
+那三样本来就该是我们的事：上游至今没修反递归（两边装的都是 0 处命中），而上游输出的是散文，不是我们的 contract。
 
 ## 已定边界
 
 
 | 决定 | 选择 | 理由 |
 | --- | --- | --- |
-| planning 从哪来 | 项目级装上游 + settings 过滤 | 要最新；票格式变了会在 claim 时大声失败 |
-| execution 从哪来 | 执行器自己的安装，按名字引用 | 按路径给会造成双份加载与版本打架；真正要保证的三样收进 brief 文本 |
-| 谁当 fleet | pi 逐票派发 | `implement-spec` 自己起 subagent 加 worktree 加 frontier，两个 orchestrator 抢分支 |
-| 票的写入权 | 只有 `Status:` 一行归扩展 | 认领是并发问题，并发问题归代码 |
-| 执行器看不看得到票 | 看不到 | brief 拷票正文，未提交的票在工作树里也可见 |
-| 交付形态 | 只有 pane，无降级 | worktree 的 git 元数据在工作树之外，sandbox 写不了 |
-| 上限在哪 | 工具里 | fix 轮上限与认领都不能交给模型裁量 |
+| planning 从哪来 | 项目级装上游 + settings 过滤 | 要最新；ticket 格式变了会在 claim 时大声失败 |
+| execution 从哪来 | executor 自己的安装，按名字引用 | 按路径给会造成双份加载与版本打架；真正要保证的三样收进 brief 文本 |
+| 谁当 fleet | pi 逐 ticket dispatch | `implement-spec` 自己起 subagent 加 worktree 加 frontier，两个 orchestrator 抢分支 |
+| ticket 的写入权 | 只有 `Status:` 一行归扩展 | claim 是并发问题，并发问题归代码 |
+| executor 看不看得到 ticket | 看不到 | brief 拷 ticket 正文，未提交的 ticket 在 worktree 里也可见 |
+| 交付形态 | 只有 pane，无降级 | worktree 的 git 元数据在 worktree 之外，sandbox 写不了 |
+| 上限在哪 | 工具里 | fix round 上限与 claim 都不能交给模型裁量 |
 | git 拦截 | 保留自研，不装 matt 的 guardrail | 两者零交集：matt 拦 push/reset/clean 且只在 claude 侧，stash 与 amend 无人管 |
 
 ## 已记账、未修（不阻塞 T1）
@@ -102,25 +102,25 @@
 
 ## T1 真跑记录（完成）
 
-- **implement**：codex，`job_01_1791733796513_9lr8`，契约 `complete`；commit
+- **implement**：codex，`job_01_1791733796513_9lr8`，contract `complete`；commit
   `5f202eb fix(smoke): judge the loaded entry and its tools`（重构 `smoke/load.ts`，
-  新增 `test/smoke.test.ts`）；契约自报 `npm run check` 84 通过。
-- **review**：claude，`job_01_1791735031901_7554`，契约 `complete`，两轴分开报，无递归
+  新增 `test/smoke.test.ts`）；contract 自报 `npm run check` 84 通过。
+- **review**：claude，`job_01_1791735031901_7554`，contract `complete`，两轴分开报，无递归
   spawn。它自己把 `smoke/load.ts` 改回 `includes("pi-fleet")` 重跑测试，证明了新测试
   抓不住那条验收。两轴各一条 blocker：
   - standards：`test/smoke.test.ts` 把真实 pi loader 与 session 拉进 `npm run test`
     （每例一次，共 5 次），与 AGENTS.md 把 loader 检查放在 `npm run smoke` 的分工冲突；
     `smoke/load.ts` 还算了一遍包根，而 `extensions/lib/skills.ts` 已导出 `PACKAGE_ROOT`。
-  - spec：票的第二条验收（按传入 entry 路径归因）没有被测试钉住：改回 substring 匹配后，
+  - spec：ticket 的第二条验收（按传入 entry 路径归因）没有被测试钉住：改回 substring 匹配后，
     `node --test test/smoke.test.ts` 仍然 5 pass。脚本本身是对的，测试没锁住它。
-- **fix round 1**：codex，`job_01_1791736483799_3viw`，契约 `complete`；把 smoke 判定抽成
-  `extensions/lib/smoke.ts` 纯函数，`npm run check` 84 通过（未提交——新流程首次验证成功）。
-- **第二次 review**：claude，`job_01_1791736945041_7yvq`，契约 `complete`。spec 全过：
+- **fix round 1**：codex，`job_01_1791736483799_3viw`，contract `complete`；把 smoke 判定抽成
+  `extensions/lib/smoke.ts` 纯函数，`npm run check` 84 通过（未 commit——新流程首次验证成功）。
+- **第二次 review**：claude，`job_01_1791736945041_7yvq`，contract `complete`。spec 全过：
   reviewer 重建了三个坏副本逐个验证 `exit 1`。standards 一条保留意见：集成测试被换成
   纯函数测试，坏树路径不再有回归守卫。判定不阻塞（判定分支有单测，健康树由
-  `npm run smoke` 每次端到端跑），理由记在票的 Comments 里。
-- **pi 提交**：`3977960 fix(smoke): make the smoke decision a pure function`（在 `5f202eb` 之上）。
-  票 `Status: done`，5 个 settled job 的 tab 已 cleanup。
+  `npm run smoke` 每次端到端跑），理由记在 ticket 的 Comments 里。
+- **pi commit**：`3977960 fix(smoke): make the smoke decision a pure function`（在 `5f202eb` 之上）。
+  ticket `Status: done`，5 个 settled job 的 tab 已 cleanup。
 - **合并与清理**：`bfb4ccb merge: ticket 01, the smoke test now judges what it loads`；合并后
   `npm run check` 89 通过。随后 `git worktree remove` 删 worktree，`git branch -d` 删分支。
   `herdr worktree remove` 此处不可用：cleanup 关掉最后一个 tab 后 Herdr 回收了 workspace，
@@ -131,27 +131,27 @@
 | # | 现象 | 处理 |
 | --- | --- | --- |
 | 1 | 会话里跑的是 18:08 加载的旧扩展，磁盘上已删的 vendored execution 检查仍拒绝 dispatch | 与代码无关，`/reload` 后消失。教训：改扩展后不 reload，现场就是旧内存 |
-| 2 | `FleetCleanup` 关掉 worktree 最后一个 tab 后 Herdr 回收整个空 workspace；再次派发时 `runner.ts#workspaceFor` 回退到 `HERDR_WORKSPACE_ID`，pane 静默落进主会话 workspace | **已修**：删掉回退，改为 `herdr worktree open --path`（幂等）自愈，失败才拒绝；新增 2 个 runner 测试 + 1 个 herdr 测试；SKILL 与两个工具描述同步 |
-| 3 | `skills/fleet/SKILL.md` 步骤 5 要求把票设成 `done` 再派 review，而 `claimTicket` 只接受 `ready-for-agent`，review 必然被拒 | **已修**：步骤 5 改为把票设回 `ready-for-agent` 并记录 branch；`done` 移到 review 无阻塞之后；fix round 同样先设回 |
+| 2 | `FleetCleanup` 关掉 worktree 最后一个 tab 后 Herdr 回收整个空 workspace；再次 dispatch 时 `runner.ts#workspaceFor` 回退到 `HERDR_WORKSPACE_ID`，pane 静默落进主会话 workspace | **已修**：删掉回退，改为 `herdr worktree open --path`（幂等）自愈，失败才拒绝；新增 2 个 runner 测试 + 1 个 herdr 测试；SKILL 与两个工具描述同步 |
+| 3 | `skills/fleet/SKILL.md` 步骤 5 要求把 ticket 设成 `done` 再派 review，而 `claimTicket` 只接受 `ready-for-agent`，review 必然被拒 | **已修**：步骤 5 改为把 ticket 设回 `ready-for-agent` 并记录 branch；`done` 移到 review 无阻塞之后；fix round 同样先设回 |
 
 环境侧（不是本包的 bug）：codex 默认 provider 的 `/v1/responses` 返回 404，
 claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配后两条通道的
 最小探针都通过。
 
-## 流程变更：执行器不提交，review 通过后由 pi 提交
+## 流程变更：executor 不 commit，review 通过后由 pi commit
 
 用户定下的流程，已落地到代码与技能文档：
 
-1. 执行器只改工作树，**不提交**。
-2. review 看的是**未提交的工作树**。pi 派发前先 `git -C <worktree> add -A`，
+1. executor 只改 worktree，**不 commit**。
+2. review 看的是**未 commit 的 worktree**。pi dispatch 前先 `git -C <worktree> add -A`，
    否则 `git diff` 看不到新文件。
-3. review 无阻塞 → pi 自己 `git commit`（conventional commit，subject 取票标题），
-   `git merge --no-ff` 合入 main，合并后跑一遍 `npm run check`，再把票设 `done` 并记下
+3. review 无阻塞 → pi 自己 `git commit`（conventional commit，subject 取 ticket 标题），
+   `git merge --no-ff` 合入 main，合并后跑一遍 `npm run check`，再把 ticket 设 `done` 并记下
    branch 与 sha。最后 `FleetCleanup` 关 tab，`git worktree remove` 删 worktree，
    `git branch -d <branch>` 删分支（`herdr worktree remove` 只认活着的 workspace，此处不可用）。
-4. review 有阻塞 → 票设回 `ready-for-agent` → codex 在同一未提交工作树上改 →
-   重新 review。轮数上限照旧（`PI_FLEET_MAX_FIX_ROUND`，默认 2）。
-5. 派发文本不再一刀切禁止子代理（implement 侧删除该禁令）；review 侧保留反递归
+4. review 有阻塞 → ticket 设回 `ready-for-agent` → codex 在同一未 commit 的 worktree 上改 →
+   重新 review。fix round 上限照旧（`PI_FLEET_MAX_FIX_ROUND`，默认 2）。
+5. dispatch 文本不再一刀切禁止子代理（implement 侧删除该禁令）；review 侧保留反递归
    守卫，因为“不能无限循环”正是它要防的事故。
 
 改动文件：`brief.ts`（规则与 review 输入）、`contract.ts`（implement schema 删除
@@ -160,7 +160,7 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
 通过。
 
 **注意**：当前会话的扩展是旧内存，需 `/reload` 后新流程才生效。T1 的 codex 已经
-提交了（旧流程产物），所以 T1 不需要 pi 补提交；新流程从下一张票开始。
+commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程从下一个 ticket 开始。
 
 ## 自动衔接：job settle 即唤醒会话（已实现，待 /reload）
 
@@ -173,11 +173,11 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
   --timeout 300000`，agent 状态一变就返回。Herdr 没有事件订阅命令（`herdr api` 只有
   拉取式 `snapshot`/`schema`），`agent wait` 就是它的状态通知机制。
 - 醒来后用 `runner.harvest()` 判定；`running` 就节流 15 秒再等，避开“agent 已 settled
-  但契约未写”引起的空转。**契约文件仍是唯一成功判据**，Herdr 的 idle/done 仍只表示
+  但 contract 未写”引起的空转。**contract 文件仍是唯一成功判据**，Herdr 的 idle/done 仍只表示
   ready for input。
 - settle 后用 `pi.sendUserMessage()`（pi 文档：always triggers a turn，
   `deliverAs: "followUp"`）唤醒会话，消息只说“某 job settled，去 FleetHarvest”，不搬运
-  契约内容。
+  contract 内容。
 - 扩展加载时扫描 `runner.all()` 里未 settle 的 job 并接管：`/reload` 或重启后，旧 job
   完成也会唤醒。手动 harvest 同一个 job 会注销 watcher，避免多唤一次。
 - 开关：`PI_FLEET_AUTO_CONTINUE`（默认 on）。常量在 `extensions/lib/watch.ts`：
@@ -187,13 +187,13 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
 
 ## P0 — 首次真跑
 
-- [x] **T1 一张票、codex、pane**：完成，两半都过校验（详见上节）。
+- [x] **T1 一个 ticket、codex、pane**：完成，两半都过校验（详见上节）。
   `/fleet-setup` → `setup-matt-pocock-skills` → `herdr worktree create` →
-  `FleetDispatch` → 执行器写 `result.json` → `FleetHarvest` 过校验。
-- [x] **T2 同票 claude review**：完成，还多跑了一轮 fix 后的复审。两轴分开报，
+  `FleetDispatch` → executor 写 `result.json` → `FleetHarvest` 过校验。
+- [x] **T2 同一个 ticket claude review**：完成，还多跑了一轮 fix 后的复审。两轴分开报，
   claude 没有递归 spawn（它甚至自己重建代码验证测试断言是否为真）。
-- [ ] **T3 并发认领 / T4 坏契约 / T5 idle 宽限**：故障路径，单测已覆盖
-  （`claimTicket` 二次认领、契约字段校验、idle grace），真跑未做。低优先。
+- [ ] **T3 并发 claim / T4 坏 contract / T5 idle 宽限**：故障路径，单测已覆盖
+  （`claimTicket` 二次 claim、contract 字段校验、idle grace），真跑未做。低优先。
 
 ## P1 — 环境假设（已由 T1 真跑验证）
 
@@ -208,10 +208,10 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
 
 - [ ] **只想要 matt skills、不想要 fleet 的项目**：现在 `/fleet-setup` 依赖本包已装。
   脚本仍可单独跑（`node <pkg>/scripts/install-planning.mjs`），但没有一条不装本包的路。
-- [ ] **托管 tracker**：现在只支持本地 markdown。认领要换成一次 API 调用，其余设计不受影响。
-- [ ] **wayfinder**：它的决策票会调 `research` 与 `prototype`（执行类）。要做就把这两个
+- [ ] **托管 tracker**：现在只支持本地 markdown。claim 要换成一次 API 调用，其余设计不受影响。
+- [ ] **wayfinder**：它的决策 ticket 会调 `research` 与 `prototype`（执行类）。要做就把这两个
   一起放进 planning，或让它走一条独立的 pane。
-- [ ] **多票并发**：现在一次一票走完。跨票并发只需在同一 tab 的 exec 列继续 split
+- [ ] **多 ticket 并发**：现在一次一 ticket 走完。跨 ticket 并发只需在同一 tab 的 exec 列继续 split
   （`TAB_FANOUT_LIMIT` 已就位），收尾顺序需要决定。
 - [ ] **`excluded` 里的 25 条全是文档，无人校验**：理由写在 `skills/manifest.json`。
   其中 7 条（`codebase-design`、`diagnosing-bugs`、`improve-codebase-architecture`、`pr`、
@@ -222,7 +222,7 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
 ## P3 — 上游补丁（T1 后的结论）
 
 - [x] **去掉 `implement` 的加载需求**：已做到。brief 完全不引用上游 `implement`，
-  它的自审指令不再进入执行器。
+  它的自审指令不再进入 executor。
 - [ ] **给 `code-review` 提 PR**：加反递归那一行。仍值得做；本包已用自己的守卫兜住
   （review 任务里显式禁止 spawn，两轮真跑都没有递归）。
 - [x] **`invocation.md` 的约定冲突**：T1 现场显示 codex 的 pane 日志写着
@@ -231,6 +231,6 @@ claude 报 `unrecognized_model: tierflow_pro[1m]` 但仍出结果；用户重配
 
 ## 下次开工入口
 
-票 02 已就绪：`.scratch/manifest-exclusions/issues/01-collapse-repeated-exclusion-reasons.md`，
-worktree 已建于 `fleet/02-manifest-exclusions`（workspace w26）。用户 `/reload` 后派发，
-然后不动键盘，验证全自动链路：wait 信号 → harvest → review → pi 提交 → 合并 → 清理。
+ticket 02 已就绪：`.scratch/manifest-exclusions/issues/01-collapse-repeated-exclusion-reasons.md`，
+worktree 已建于 `fleet/02-manifest-exclusions`（workspace w26）。用户 `/reload` 后 dispatch，
+然后不动键盘，验证全自动链路：wait 信号 → harvest → review → pi commit → 合并 → 清理。
