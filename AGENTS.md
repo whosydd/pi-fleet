@@ -15,7 +15,7 @@ stand-in that answers the same argv and logs what it was asked.
 
 - `extensions/index.ts` — pi extension entry: four tool definitions, the `/fleet-setup` command, the git guard handlers, and the small decisions that need job state. Keep it thin.
 - `extensions/lib/` — implementation modules. `runner.ts` is the only module that spawns, and the only one that calls the herdr CLI. `herdr.ts`, `brief.ts`, `contract.ts`, `gitguard.ts`, `selection.ts`, and `tickets.ts` own the decisions and stay free of spawning so they test without a session.
-- `skills/manifest.json` — the upstream names in the `planning` and `execution` lists, plus the `excluded` map and its reasons. `$`-prefixed keys in `excluded` are shared explanations, not skills. Both live lists are names this package relies on, not content it ships.
+- `skills/manifest.json` — the upstream names in the `planning` and `execution` lists, plus the `excluded` map and its reasons. A `$`-prefixed key carries one shared explanation instead of naming a skill: at the top level `$planning` and `$execution` explain their whole list, and inside `excluded` a key such as `$executor-provides` is what the entries that use it name as their reason. Both live lists are names this package relies on, not content it ships.
 - `skills/fleet/` — this package's own orchestrating skill. The only skill this package declares, and the only skill it ships.
 - `scripts/install-planning.mjs` — writes the filtered upstream install into a project's `.pi/settings.json`.
 - `extensions/lib/preflight.ts` — the one project mutation this package makes: the project's `.gitignore` must cover `.pi/fleet/`, or the fleet's artifacts appear as the project's untracked work.

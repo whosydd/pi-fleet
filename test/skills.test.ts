@@ -85,6 +85,12 @@ function exclusionReason(value: string): string | undefined {
 }
 
 test("a repeated exclusion reason is written once, and every entry that used it points at it", () => {
+	// The manifest collapsed eight, three and two entries onto one shared sentence
+	// each. Two choices below are deliberate and easy to undo by accident, which is
+	// why they are the ones that carry a reason. `raw` counts the sentence in the
+	// file text, because a sentence written out twice parses into a map that looks
+	// correct. Both halves of the user list are sorted, so reordering the manifest
+	// is not a failure.
 	const raw = readFileSync(join(packageRoot, "skills", "manifest.json"), "utf8");
 	assert.deepEqual(
 		[...sharedReasons.keys()].sort(),
@@ -92,7 +98,7 @@ test("a repeated exclusion reason is written once, and every entry that used it 
 		"the manifest carries exactly the shared explanations",
 	);
 	for (const [key, expected] of Object.entries(expectedSharedReasons)) {
-		const reason = manifest.excluded[key];
+		const reason = exclusionReason(key);
 		assert.ok(reason && reason.trim().length > 20, `${key} has a usable explanation`);
 		assert.equal(raw.split(reason).length - 1, 1, `${key}'s explanation must appear once in the file`);
 		const users = Object.entries(manifest.excluded)
