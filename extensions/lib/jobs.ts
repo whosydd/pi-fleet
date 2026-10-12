@@ -9,7 +9,7 @@
  * anything held in memory.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { JOB_SCHEMA_VERSION, type FleetSettings, type JobMeta } from "./types.ts";
 
@@ -90,9 +90,25 @@ export function readMeta(settings: FleetSettings, id: string): MetaRead {
 	return typeof checked === "string" ? { kind: "stale", id, reason: checked } : { kind: "job", meta: checked };
 }
 
+/** True when the path names a directory. A stat that fails for any reason is no. */
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 function listRuns(settings: FleetSettings): MetaRead[] {
 	if (!existsSync(settings.runsDir)) return [];
-	return readdirSync(settings.runsDir).map((id) => readMeta(settings, id));
+	// A run directory is a directory: `statSync` follows a symlink, so a run
+	// directory reached through one is still listed. A stat that fails for any
+	// reason cannot call the entry a directory, so the scan skips a plain file,
+	// a broken link, and a link that resolves to itself. The directories around
+	// them are still reported as jobs or as leftover dispatches.
+	return readdirSync(settings.runsDir)
+		.filter((id) => isDirectory(join(settings.runsDir, id)))
+		.map((id) => readMeta(settings, id));
 }
 
 /** Every readable job, oldest first. An unreadable run directory is not a job. */
@@ -106,12 +122,21 @@ export function listJobs(settings: FleetSettings): JobMeta[] {
 /**
  * Run directories this release cannot read, with the reason.
  *
- * Reported rather than hidden: they are the leftovers of an earlier release, and
- * a silent skip would leave FleetStatus showing nothing while the disk holds
- * directories the user may want to know about.
+ * Reported rather than hidden: they are the leftovers of an earlier release or
+ * of a dispatch that died between `mkdir` and its meta write, and a silent skip
+ * would leave FleetStatus showing nothing while the disk holds directories the
+ * user may want to know about.
+ *
+ * A directory with no meta at all is a leftover too. It is not a job — harvest
+ * and cleanup still refuse it — but a failed dispatch's own cleanup removes one,
+ * so anything left is a visible fault worth a reason.
  */
 export function listStale(settings: FleetSettings): StaleRun[] {
-	return listRuns(settings).flatMap((read) => (read.kind === "stale" ? [{ id: read.id, reason: read.reason }] : []));
+	return listRuns(settings).flatMap((read) => {
+		if (read.kind === "stale") return [{ id: read.id, reason: read.reason }];
+		if (read.kind === "absent") return [{ id: read.id, reason: "meta.json is absent, so the dispatch did not finish" }];
+		return [];
+	});
 }
 
 export function writeMeta(settings: FleetSettings, meta: JobMeta): void {

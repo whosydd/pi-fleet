@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -133,6 +133,57 @@ test("dispatch builds the run directory, opens a pane, and starts the executor",
 		// The tab herdr opened is renamed to the ticket, not left as `1`.
 		assert.deepEqual(calls.find((call) => call[0] === "tab" && call[1] === "rename")?.slice(0, 4), ["tab", "rename", "wF:t1", "03 Token refresh"]);
 		assert.match(calls.find((call) => call[0] === "agent" && call[1] === "prompt")?.join(" ") ?? "", /\/runs\/job_03_/);
+	} finally {
+		cleanup(h);
+	}
+});
+
+test("a refused prompt fails readably, keeps the pane, and leaves no run directory", async () => {
+	const h = harness({ FAKE_HERDR_NO_ROOT_PANE: "1", FAKE_HERDR_PROMPT_BLOCKED: "1" });
+	try {
+		claimTicket(h.ticketPath);
+		const outcome = await new Runner(h.settings).dispatch(dispatchInput(h));
+		assert.equal(outcome.ok, false);
+		const error = outcome.ok ? "" : outcome.error;
+
+		// Short enough to read, and it names the two things a human acts on.
+		assert.match(error, /implement-03/);
+		assert.match(error, /wF:p1/);
+		assert.match(error, /waiting for a human at an approval/);
+		assert.match(error, /answer or escape/i);
+		// Herdr's own reason is the actionable part, so it stays.
+		assert.match(error, /agent_blocked/);
+		assert.match(error, /requires interactive input/);
+		assert.ok(error.length < 1000, `error was ${error.length} characters`);
+
+		// The task is one argv entry, and a long one is abbreviated rather than
+		// quoted: the error carries no task text.
+		assert.match(error, /argument of \d+ characters/);
+		assert.doesNotMatch(error, /Read the brief at:/);
+		assert.doesNotMatch(error, /One refresh per expiry\./);
+
+		// The blocked agent stays where it is: no second pane, no replacement agent,
+		// no closed tab, and no half-built run directory behind.
+		assert.deepEqual(readdirSync(h.settings.runsDir), []);
+		const calls = h.logCalls().map((call) => call.slice(0, 2).join(" "));
+		assert.deepEqual(calls, ["workspace list", "pane list", "tab create", "tab rename", "agent start", "agent prompt"]);
+		assert.equal(h.logCalls().filter((call) => call[0] === "tab" && call[1] === "close").length, 0);
+	} finally {
+		cleanup(h);
+	}
+});
+
+test("a failed agent start leaves no run directory and still closes the tab it opened", async () => {
+	const h = harness({ FAKE_HERDR_NO_ROOT_PANE: "1", FAKE_HERDR_START_FAIL: "1" });
+	try {
+		claimTicket(h.ticketPath);
+		const outcome = await new Runner(h.settings).dispatch(dispatchInput(h));
+		assert.equal(outcome.ok, false);
+		assert.match(outcome.ok ? "" : outcome.error, /agent_start_failed/);
+		assert.deepEqual(readdirSync(h.settings.runsDir), []);
+
+		const calls = h.logCalls().map((call) => call.slice(0, 2).join(" "));
+		assert.deepEqual(calls, ["workspace list", "pane list", "tab create", "tab rename", "agent start", "tab close"]);
 	} finally {
 		cleanup(h);
 	}
@@ -461,6 +512,88 @@ test("a run directory from another release is not a job: it is named, and left a
 		// The point of the whole check: nothing wrote a verdict onto somebody else's
 		// record. A fresh harvest of a stale job must not settle it.
 		assert.deepEqual(JSON.parse(readFileSync(stalePath, "utf8")), staleMeta);
+	} finally {
+		cleanup(h);
+	}
+});
+
+test("a run directory with no meta is reported as a leftover dispatch that did not finish", async () => {
+	const h = harness({});
+	try {
+		claimTicket(h.ticketPath);
+		const built = await new Runner(h.settings).dispatch(dispatchInput(h));
+		assert.equal(built.ok, true, built.ok ? "" : built.error);
+		if (!built.ok) return;
+
+		// The shape a failure between `mkdir` and `writeMeta` used to leave behind:
+		// a run directory with no meta at all.
+		const abandoned = join(h.settings.runsDir, "job_03_abandoned");
+		mkdirSync(abandoned, { recursive: true });
+		writeFileSync(join(abandoned, "brief.md"), "# Ticket 03\n", "utf8");
+
+		// A plain file in the run root is not a run directory, so it is not a
+		// dispatch that did not finish either.
+		writeFileSync(join(h.settings.runsDir, ".DS_Store"), "", "utf8");
+		writeFileSync(join(h.settings.runsDir, "notes.txt"), "not a run\n", "utf8");
+
+		const runner = new Runner(h.settings);
+		assert.equal(runner.all().length, 1, "the readable job is still a job");
+		const stale = runner.stale();
+		assert.deepEqual(stale.map((run) => run.id), ["job_03_abandoned"]);
+		assert.match(stale[0]!.reason, /dispatch did not finish/);
+		// FleetStatus renders exactly this list as its leftover note: the id, the
+		// reason, and no readable job among them.
+	} finally {
+		cleanup(h);
+	}
+});
+
+test("a run directory reached through a symlink is still a job", async () => {
+	const h = harness({});
+	try {
+		claimTicket(h.ticketPath);
+		const built = await new Runner(h.settings).dispatch(dispatchInput(h));
+		assert.equal(built.ok, true, built.ok ? "" : built.error);
+		if (!built.ok) return;
+
+		// The link is what the run root holds; the job it names is behind it.
+		const real = join(h.dir, "real-run");
+		renameSync(built.meta.runDir, real);
+		symlinkSync(real, built.meta.runDir);
+
+		const runner = new Runner(h.settings);
+		assert.deepEqual(runner.all().map((job) => job.id), [built.meta.id]);
+		assert.deepEqual(runner.stale(), []);
+	} finally {
+		cleanup(h);
+	}
+});
+
+test("a run root holding a link it cannot resolve still lists every readable run", async () => {
+	const h = harness({});
+	try {
+		claimTicket(h.ticketPath);
+		const built = await new Runner(h.settings).dispatch(dispatchInput(h));
+		assert.equal(built.ok, true, built.ok ? "" : built.error);
+		if (!built.ok) return;
+
+		// A directory with no meta beside the readable job is still a leftover.
+		const abandoned = join(h.settings.runsDir, "job_03_abandoned");
+		mkdirSync(abandoned, { recursive: true });
+
+		// The link points at itself, so stat cannot resolve it to a directory.
+		// It is not a job and not a leftover, and it must not take the scan down.
+		symlinkSync("loop", join(h.settings.runsDir, "loop"));
+
+		const runner = new Runner(h.settings);
+		assert.deepEqual(
+			runner.all().map((job) => job.id),
+			[built.meta.id],
+		);
+		assert.deepEqual(
+			runner.stale().map((run) => run.id),
+			["job_03_abandoned"],
+		);
 	} finally {
 		cleanup(h);
 	}

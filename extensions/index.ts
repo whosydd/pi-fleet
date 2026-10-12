@@ -436,13 +436,13 @@ export default function fleetExtension(pi: ExtensionAPI) {
 				jobs.length === 0
 					? `No fleet jobs under ${settings.runsDir}. The frontier of ready tickets lives in the tracker's own files, not here.`
 					: `${jobs.length} job(s) on disk${openTabs.length > 0 ? `, ${openTabs.length} pane tab(s) still open` : ""}:\n${jobs.map(jobLine).join("\n")}`;
-			// Leftovers from another release are named rather than hidden. A run
-			// directory this release cannot read is not a job, so it is not counted,
-			// not harvested, and not closed — but the user still needs to know it is
-			// there and why it is inert.
+			// Leftovers are named rather than hidden: a record from an earlier release,
+			// or a dispatch that did not finish. A run directory that is not a readable
+			// job is not counted, not harvested, and not closed, but the user still
+			// needs to know it is there and why it is inert.
 			const staleNote =
 				stale.length > 0
-					? `\n\n${stale.length} run director${stale.length === 1 ? "y" : "ies"} this release cannot read (leftovers from an earlier pi-fleet):\n${stale.map((run) => `  ${run.id} — ${run.reason}`).join("\n")}\nDelete them, or dispatch their tickets again.`
+					? `\n\n${stale.length} run director${stale.length === 1 ? "y" : "ies"} this release cannot read (leftovers: from an earlier pi-fleet, or from a dispatch that did not finish):\n${stale.map((run) => `  ${run.id} — ${run.reason}`).join("\n")}\nDelete them, or dispatch their tickets again.`
 					: "";
 			return textResult(`${head}${staleNote}`, details);
 		},
