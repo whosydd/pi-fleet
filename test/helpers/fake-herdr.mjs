@@ -49,8 +49,18 @@ if (group === "workspace" && verb === "list") {
 	// answers at once with the state the test asked for.
 	emit({ agent: { name: argv[2], agent_status: process.env.FAKE_HERDR_AGENT_STATE ?? "working", pane_id: `${workspace}:p1`, tab_id: `${workspace}:t1` } });
 } else if (group === "agent" && verb === "start") {
+	// The real CLI answers an agent it cannot start with a non-zero exit.
+	if (process.env.FAKE_HERDR_START_FAIL === "1") {
+		process.stderr.write(`${JSON.stringify({ error: { code: "agent_start_failed", message: `agent ${argv[2]} could not start` } })}\n`);
+		process.exit(1);
+	}
 	emit({ agent: { name: argv[2], agent_status: "idle" } });
 } else if (group === "agent" && verb === "prompt") {
+	if (process.env.FAKE_HERDR_PROMPT_BLOCKED === "1") {
+		// The real CLI refuses to prompt an agent that sits at an approval.
+		process.stderr.write(`${JSON.stringify({ error: { code: "agent_blocked", message: `agent ${argv[2]} is blocked and requires interactive input` } })}\n`);
+		process.exit(1);
+	}
 	emit({ submitted: true });
 } else if (group === "tab" && verb === "close") {
 	emit({ closed: true });

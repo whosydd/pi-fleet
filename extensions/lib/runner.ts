@@ -19,7 +19,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { buildBrief, buildTask } from "./brief.ts";
@@ -101,7 +101,7 @@ export class Runner {
 		return listJobs(this.settings);
 	}
 
-	/** Run directories an earlier release wrote, which this one cannot read. */
+	/** Run directories this release cannot read: another release's, or a dispatch that did not finish. */
 	stale(): StaleRun[] {
 		return listStale(this.settings);
 	}
@@ -163,6 +163,7 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 			writeFileSync(paths.briefPath, brief, "utf8");
 			writeFileSync(paths.taskPath, task, "utf8");
 		} catch (error) {
+			discardRunDir(paths.runDir);
 			return { ok: false, error: `cannot prepare the run directory at ${paths.runDir}: ${error instanceof Error ? error.message : String(error)}` };
 		}
 
@@ -183,14 +184,23 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 		};
 
 		const placed = await this.#place(meta, workspaceId);
-		if (!placed.ok) return { ok: false, error: placed.error };
+		if (!placed.ok) {
+			// Nothing reached the agent, so without this removal the run directory
+			// would be reported as a leftover whose reason names a dispatch that
+			// did not finish.
+			discardRunDir(paths.runDir);
+			return { ok: false, error: placed.error };
+		}
 		meta.pane = placed.pane;
 		const sent = await this.#call(agentPromptArgv(placed.agentName, task), PROMPT_CALL_MS);
 		if (!sent.ok) {
 			// The agent is up but never got the task. Close what this job opened, so no
-			// half-started executor sits idle in the human's tab.
-			if (placed.createdTab) await this.#call(tabCloseArgv(placed.pane.tabId), CALL_MS);
-			return { ok: false, error: sent.error };
+			// half-started executor sits idle in the human's tab — unless Herdr refused
+			// because the agent is blocked: that pane waits on a human, and closing it
+			// would kill the context an approval is holding.
+			if (placed.createdTab && !isBlockedRefusal(sent.error)) await this.#call(tabCloseArgv(placed.pane.tabId), CALL_MS);
+			discardRunDir(paths.runDir);
+			return { ok: false, error: refusedPromptError(sent.error, placed.agentName, placed.pane.paneId) };
 		}
 
 		writeMeta(this.settings, meta);
@@ -499,10 +509,57 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 			const { stdout } = await execFileAsync(this.settings.herdrBin, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
 			return { ok: true, stdout };
 		} catch (error) {
-			const failure = error as { message?: string; stdout?: string; stderr?: string };
+			const failure = error as { code?: unknown; signal?: unknown; stdout?: string; stderr?: string };
 			const detail = `${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim().replace(/\s+/g, " ");
-			return { ok: false, error: `${this.settings.herdrBin} ${args.join(" ")} failed: ${failure.message ?? String(error)}${detail ? ` | ${detail.slice(0, 300)}` : ""}` };
+			// Never quote the child's exit message: it repeats the whole argv, and one
+			// argv entry is the task, which can be dozens of lines. Herdr's own JSON on
+			// stderr carries the actionable reason, so that is the reason kept.
+			const exit =
+				typeof failure.code === "number"
+					? `exit code ${failure.code}`
+					: typeof failure.code === "string"
+						? `spawn failure ${failure.code}`
+						: failure.signal
+							? `killed by ${String(failure.signal)}`
+							: "no output";
+			const command = args.map(abbreviateArg).join(" ");
+			return { ok: false, error: `${this.settings.herdrBin} ${command} failed: ${detail ? detail.slice(0, 300) : exit}` };
 		}
+	}
+}
+
+/**
+ * One argv entry, as an error may quote it.
+ *
+ * A task is one argv entry and can be dozens of lines. Herdr's failure is the
+ * only short part of the message, so a long entry is replaced by its length
+ * instead of being echoed back into the dispatch error.
+ */
+function abbreviateArg(arg: string): string {
+	return arg.length > 80 ? `<argument of ${arg.length} characters>` : arg;
+}
+
+/** Herdr's refusal code for an agent that sits at an approval. */
+function isBlockedRefusal(error: string): boolean {
+	return /agent_blocked/.test(error);
+}
+
+/**
+ * The error a refusal to prompt deserves: where the human is needed, and what
+ * Herdr said. The blocked agent is left exactly where it is — an approval is a
+ * decision a human owes, and the pane holds the context a fix round reuses.
+ */
+function refusedPromptError(error: string, agentName: string, paneId: string): string {
+	if (!isBlockedRefusal(error)) return error;
+	return `the executor ${agentName} in pane ${paneId} is waiting for a human at an approval, so Herdr refused the prompt. Answer or escape it in that pane, then dispatch again. Herdr said: ${error}`;
+}
+
+/** Best-effort removal of a run directory whose dispatch never finished. */
+function discardRunDir(dir: string): void {
+	try {
+		rmSync(dir, { recursive: true, force: true });
+	} catch {
+		// The dispatch is already failing; the tool result is the better record.
 	}
 }
 

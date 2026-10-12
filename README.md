@@ -170,8 +170,10 @@ else's record.
 ### FleetStatus
 
 List the jobs on disk, including jobs from earlier sessions, with the pane tabs
-still open. Run directories from another release are listed separately, with the
-reason. This tool does not compute a frontier: the tracker's own convention
+still open. Run directories this release cannot read are listed separately, with
+the reason: a record from another release, or a directory whose dispatch did not
+finish and never wrote its `meta.json`. A readable job is never counted as a
+leftover. This tool does not compute a frontier: the tracker's own convention
 defines one, and the fleet skill says how to read it.
 
 ### FleetCleanup
