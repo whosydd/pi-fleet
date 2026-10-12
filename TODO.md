@@ -231,17 +231,26 @@ commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程�
 
 ## 下次开工入口
 
-ticket 02 暂停（2026-10-12）：`.scratch/manifest-exclusions/issues/01-collapse-repeated-exclusion-reasons.md`
-的工作在 worktree `fleet-02-manifest-exclusions` 里已经做完（`npm run check` 90 绿），但两轮
-implement 都在写 contract 前撞上 tierflow 的 400，没能留下 `contract_complete`。用户正在
-把 codex 移出 tierflow 路由器，暂停在此。
+T1 的 ticket 02 已完成（2026-10-12）：`.scratch/manifest-exclusions/issues/01-collapse-repeated-exclusion-reasons.md`
+两轮 review 后合并进 main（worktree commit `a3e315c`，merge `74d9391`），worktree 与
+branch 已删除，`npm run check` 96 绿。
 
-恢复时的两条路：
+下一张票：`.scratch/` 下没有其他 `ready-for-agent` 的票。要继续就先把本轮留下的
+三条非阻塞观察开成一张新票（见下节）。
 
-1. `git -C <worktree> status --short` 确认改动仍在 → `git add -A` → 票设回
-   `ready-for-agent` → 直接派 claude review（base 取 worktree 起点 `3ec9e93`）。工作树是
-   review 的输入，不依赖 implement 的 contract。
-2. 或者先重跑一轮 implement，拿一个干净的 `contract_complete` 再 review。
+## ticket 02 遗留的三条非阻塞观察（2026-10-12）
+
+第三轮 review 的 spec 轴全绿（reviewer 在临时副本里破坏验证过 guard：把句子内联回条目
+会失败、悬空指针会失败、改写共享解释会通过），standards 轴只剩三条风格项，不足一轮
+fix round（cap 也已用满，`PI_FLEET_MAX_FIX_ROUND=2`）：
+
+- `test/skills.test.ts:87` 的新 guard 没有"为什么存在"的注释，而该文件其他非平凡
+guard 都有（如 `:27-31`、`:42-44`）。后面改动最容易撤销的两个选择——在原始文件文本
+里数出现次数、对两侧排序——正好是没被解释的那两个。
+- `AGENTS.md:18` 把 `$` 约定限定在 `excluded` 里，而票自己引用的先例是顶层键
+（`skills/manifest.json:6` 的 `$planning`、`:19` 的 `$execution`），这一行仍未提到。
+- 同一个值在测试里有三种取法：`sharedReasons`、`exclusionReason`（`:83` 定义）、
+以及新 guard 里的 `manifest.excluded[key]`。
 
 ## tierflow 中转诊断（2026-10-12）
 
@@ -267,10 +276,24 @@ re-prompt 首轮的 executor（`exec[0]`），保留它自己的 context。`occu
 
 `fleet-01-4myt` 与 `fleet: 01` 对看侧边栏的人没有信息量。现在：
 
-- **agent**：`<role>-<ticket id>-<标题实词>`，例 `implement-02-manifest-explains`、
-  `review-02-manifest-explains`。role 说清谁在干，标题实词区分同一 feature 的不同 ticket。
-- **tab label**：`<nn> <标题>`。Herdr 按侧边栏宽度截断 label，票号在前才能活下来。
-- 停用词（the/a/its/must/…）直接跳过；按词边界截断，总长 ≤ 32（Herdr 的命名规则）。
+- **agent**：`<role>-<ticket id>`，例 `implement-01`、`reviewer-01`（role `review` 写成
+  `reviewer`）。
+- **tab label**：`<nn> <标题>`。Herdr 按侧边栏宽度截断 label，票号在前才能活下来；
+  复用来的 tab（`herdr worktree create` 自带的第一个 tab 叫 `1`）也会被 rename 成票名。
 - fix round 复用同一 executor，所以一个 ticket 每个 role 只有一个 agent 名。
 
-`npm run check` 91 通过。
+提交 `7edfa08`、`39629ea`、`938a1d0`，`npm run check` 95 通过。
+
+## pane 复用、nudge 与 watcher 生命周期（2026-10-12）
+
+- **worktree 自带的 tab 不再空着**：`herdr worktree create` 开 workspace 时自带一个 tab
+  （label 是 `1`）。以前本包再 `tab create` 一个，第一个就永远空着。现在 `#place` 先看该
+  workspace 的第一个 pane，空闲就直接在上面 `agent start`，被占用或不存在才新建
+  （`39629ea`）。
+- **provider 拒单自动续跑**：tierflow 偶发 400 会让 codex 停在提示符，idle grace 一到
+  job 就被判 `contract_failed`——人手来不及回。watcher 现在在 agent idle 满 15 秒且没有
+  contract 时替人发 `continue`，最多 3 次（`39629ea`）。
+- **watcher 跟着 session 走**：watcher 在 `session_start` 接管未结算的 job、在
+  `session_shutdown` 清空，唤醒那一步加了保护。否则 `/reload` 之后旧 watcher 拿着失效的
+  `pi` 抛异常，异常落在无人接管的 async 循环里（`938a1d0`）。smoke 建的是 headless
+  session，所以它在读设置的那次 reload 之前就把 watcher 关掉。
