@@ -227,7 +227,12 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 		} else if (action.kind === "reuse") {
 			tabId = openTabId;
 			paneId = action.paneId;
-			existingAgent = jobs.find((job) => job.pane?.paneId === action.paneId && job.paneClosedAt === undefined && job.pane?.agentName)?.pane?.agentName;
+			const candidate = jobs.find((job) => job.pane?.paneId === action.paneId && job.paneClosedAt === undefined && job.pane?.agentName)?.pane?.agentName;
+			// Herdr forgets a name the moment its agent exits, and this package reuses
+			// panes across fix rounds and re-reviews. Re-prompting a dead name fails the
+			// whole dispatch, so the name is resolved first: a pane whose agent is gone
+			// gets a fresh one in the same place, which keeps the layout the human saw.
+			existingAgent = candidate !== undefined && (await this.#agent(candidate)) !== undefined ? candidate : undefined;
 		} else {
 			const split = await this.#call(paneSplitArgv(action.anchor, action.direction, meta.worktree), CALL_MS);
 			if (!split.ok) {

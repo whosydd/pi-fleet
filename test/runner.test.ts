@@ -210,6 +210,29 @@ test("a fix round continues in the executor that built the ticket", async () => 
 	}
 });
 
+test("a fix round starts a fresh executor when the reuse target's agent is gone", async () => {
+	// The human closed the codex TUI between rounds. Herdr no longer knows the
+	// name, but the pane is still there, and the fix round belongs in it.
+	const h = harness({ FAKE_HERDR_AGENT_GONE: "1" });
+	try {
+		const runner = new Runner(h.settings);
+		claimTicket(h.ticketPath);
+		const built = await runner.dispatch(dispatchInput(h));
+		assert.equal(built.ok, true, built.ok ? "" : built.error);
+		if (!built.ok) return;
+
+		claimTicket(h.ticketPath);
+		const fixed = await runner.dispatch(dispatchInput(h, { fixRound: 1, findings: ["standards: x"] }));
+		assert.equal(fixed.ok, true, fixed.ok ? "" : fixed.error);
+		if (!fixed.ok) return;
+		assert.equal(fixed.meta.pane?.paneId, built.meta.pane?.paneId);
+		assert.equal(h.logCalls().filter((call) => call[0] === "agent" && call[1] === "start").length, 2, "a fresh codex in the same pane");
+		assert.equal(h.logCalls().filter((call) => call[0] === "pane" && call[1] === "split").length, 0);
+	} finally {
+		cleanup(h);
+	}
+});
+
 test("a review reuses the pane the first review used, and never a second tab", async () => {
 	const h = harness({});
 	try {
