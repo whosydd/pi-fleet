@@ -58,12 +58,62 @@ test("the upstream implementation skill is not named, because it would reinstate
 	);
 });
 
+const sharedReasons = new Map(Object.entries(manifest.excluded).filter(([key]) => key.startsWith("$")));
+const expectedSharedReasons = {
+	"$executor-provides": {
+		users: [
+			"engineering/codebase-design",
+			"engineering/diagnosing-bugs",
+			"engineering/improve-codebase-architecture",
+			"engineering/pr",
+			"engineering/prototype",
+			"engineering/research",
+			"engineering/retro",
+			"engineering/wizard",
+		],
+	},
+	"$writing-prose": {
+		users: ["in-progress/writing-beats", "in-progress/writing-fragments", "in-progress/writing-shape"],
+	},
+	"$project-scaffold": {
+		users: ["in-progress/setup-ts-deep-modules", "misc/setup-pre-commit"],
+	},
+};
+
+function exclusionReason(value: string): string | undefined {
+	return value.startsWith("$") ? sharedReasons.get(value) : value;
+}
+
+test("a repeated exclusion reason is written once, and every entry that used it points at it", () => {
+	const raw = readFileSync(join(packageRoot, "skills", "manifest.json"), "utf8");
+	assert.deepEqual(
+		[...sharedReasons.keys()].sort(),
+		Object.keys(expectedSharedReasons).sort(),
+		"the manifest carries exactly the shared explanations",
+	);
+	for (const [key, expected] of Object.entries(expectedSharedReasons)) {
+		const reason = manifest.excluded[key];
+		assert.ok(reason && reason.trim().length > 20, `${key} has a usable explanation`);
+		assert.equal(raw.split(reason).length - 1, 1, `${key}'s explanation must appear once in the file`);
+		const users = Object.entries(manifest.excluded)
+			.filter(([path, why]) => path !== key && why === key)
+			.map(([path]) => path);
+		assert.deepEqual([...users].sort(), [...expected.users].sort(), `${key} must point at exactly its original users`);
+	}
+	for (const [path, why] of Object.entries(manifest.excluded)) {
+		if (path.startsWith("$")) continue;
+		if (why.startsWith("$")) assert.ok(sharedReasons.has(why), `${path} points at a reason the manifest does not carry`);
+	}
+});
+
 test("the manifest classifies the skills this package relies on, with a reason for each exclusion", () => {
 	const all = [...manifest.planning, ...manifest.execution];
 	assert.equal(new Set(all).size, all.length, "a skill cannot be in both live lists");
 	assert.ok(manifest.planning.length > 0 && manifest.execution.length > 0);
 	for (const [path, why] of Object.entries(manifest.excluded)) {
-		assert.ok(why.trim().length > 20, `${path} is excluded without a usable reason`);
+		if (path.startsWith("$")) continue;
+		const reason = exclusionReason(why);
+		assert.ok(reason && reason.trim().length > 20, `${path} is excluded without a usable reason`);
 		assert.equal(all.includes(path), false, `${path} is both listed and excluded`);
 	}
 	for (const path of all) assert.match(path, /^[a-z-]+\/[a-z0-9-]+$/, `${path} is not a <bucket>/<name> upstream path`);

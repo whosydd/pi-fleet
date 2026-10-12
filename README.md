@@ -199,7 +199,9 @@ to the job.
 `skills/manifest.json` holds two lists of upstream names: the `planning` set,
 which `/fleet-setup` installs into the project, and the `execution` set, which
 the task text names. The `excluded` map records the upstream skills this package
-deliberately does not use, and why.
+deliberately does not use, and why. A `$`-prefixed key holds a shared
+explanation, and a `$`-prefixed value is a pointer to another key in that same
+map.
 
 `pi update` is the only thing that moves the upstream clone, and it moves the
 clone to whatever `main` is. Upstream moves skills between buckets, so a planning
