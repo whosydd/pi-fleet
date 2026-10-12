@@ -192,8 +192,10 @@ commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程�
   `FleetDispatch` → executor 写 `result.json` → `FleetHarvest` 过校验。
 - [x] **T2 同一个 ticket claude review**：完成，还多跑了一轮 fix 后的复审。两轴分开报，
   claude 没有递归 spawn（它甚至自己重建代码验证测试断言是否为真）。
-- [ ] **T3 并发 claim / T4 坏 contract / T5 idle 宽限**：故障路径，单测已覆盖
-  （`claimTicket` 二次 claim、contract 字段校验、idle grace），真跑未做。低优先。
+- [x] **T3 并发 claim / T4 坏 contract / T5 idle 宽限**：2026-10-12 真跑完成，三条全部
+  按设计判定。证据在 `.scratch/fault-paths/issues/01-fault-fixture.md` 的 Comments，
+  真跑另捞出两条真 bug（F1 blocked agent 复用失败、F2 失败 dispatch 留下孤儿 run 目录），
+  见下面「故障路径真跑」一节。
 
 ## P1 — 环境假设（已由 T1 真跑验证）
 
@@ -235,8 +237,79 @@ T1 的 ticket 02 已完成（2026-10-12）：`.scratch/manifest-exclusions/issue
 两轮 review 后合并进 main（worktree commit `a3e315c`，merge `74d9391`），worktree 与
 branch 已删除，`npm run check` 96 绿。
 
-下一张票：`.scratch/` 下没有其他 `ready-for-agent` 的票。要继续就先把本轮留下的
-三条非阻塞观察开成一张新票（见下节）。
+下一张票：`.scratch/` 下没有 `ready-for-agent` 的票。刚合入的 `.scratch/dispatch-failure-cleanup/`
+两张票已 `done`；F1/F2 与它们顺手捞出的 ELOOP 崩溃点都已修完并合入（见下节）。
+候选见 P2、P3，以及「已记账、未修」节。
+
+## 故障路径真跑（2026-10-12）
+
+用一张一次性 fixture 票（`.scratch/fault-paths/issues/01-fault-fixture.md`：在仓库根写一个
+`fault-fixture.txt`）跑了三条只有单测覆盖的路径。三次判定全部在读 run 目录之前不可预测，
+证据与逐条时间戳写在那张票的 Comments 里。
+
+| 路径 | 结果 |
+| --- | --- |
+| T3 二次 claim | 同一票同回合再 dispatch → `ticket 01 is not claimable: its status is "claimed"`，run 目录数不变（16→16），票停在 `claimed` |
+| T4 坏 contract | 444 的 `{"status":"done"}` 被首次 harvest 判定 → `result.status: must be implemented\|blocked\|failed, got "done"`，票不动 |
+| T5 idle 宽限 | Esc 把 codex 按在提示符 → watcher 发过一次 nudge `continue`（pane 里可见，agent 恢复工作）→ 无 contract → 120s 后判 `contract_failed`，agent 仍活着 |
+
+T4 顺带实测出两条行为事实：
+
+- **判定是粘的**：executor 事后补写了合法 contract，再 harvest 仍报最初那条错。所以
+  `contract_failed` 的出路只有重新 dispatch，修 `result.json` 没用。
+- **`idleSince` 是采样钟**：`meta.json` 里它落在 `startedAt` 之后 348ms（首次 harvest
+  见到还没开始生成的 codex），而用 Esc 压住 agent 会让后续每次采样都落在 idle 分支，
+  于是那句 `120s` 是从 dispatch 起算的墙上时间，不是连续空闲 120 秒。正常跑由第一次
+  `working` 采样清零（`runner.harvest`），无需改。
+
+真跑捞出两个真 bug（本轮只跑路径、未修，下一轮修完）：
+
+- **F1 复用 blocked agent 会整个 dispatch 失败**。`herdr agent prompt` 拒绝对处于
+  approval 的 agent 发话（`agent_blocked`），而 `planPaneAction` 正是复用那个 pane。
+  于是有未回答 approval 的上一轮，下一轮 fix round / 复审发不出去。报错本身也难读：
+  `execFile` 的 message 把整份 task 文本（约 60 行）回显在错误里，可操作的那一行埋在中间。
+- **F2 失败的 dispatch 留下孤儿 run 目录**。`mkdirSync` 与 `brief/schema/task` 三个文件
+  写在 `meta.json` 之前，而 `meta.json` 只在任务送到 agent 之后才写。残留目录没有 meta，
+  `readMeta` 判为 `absent`，`listJobs` 与 `listStale` 都跳过：磁盘上 17 个 run 目录，
+  `FleetStatus` 只列 15 个。
+
+两条都已在 `.scratch/dispatch-failure-cleanup/` 修完并合入，见下节。
+
+## dispatch 失败路径的修复（2026-10-12）
+
+`.scratch/dispatch-failure-cleanup/` 两张票，一个 commit `81fefd9`（merge `9e9e163`），
+合并后在 main 跑 `npm run check`：101 通过。
+
+| 票 | 修了什么 |
+| --- | --- |
+| 01 | prompt 被拒时给出可读的错误（点名 pane 与 agent、说明在等 approval、保留 Herdr 原文、435 字符、不含 task 文本）；`#call` 不再回显整份 argv（超 80 字符的参数缩成 `<argument of N characters>`）；失败 dispatch 删掉自己建的 run 目录；`FleetStatus` 把无 meta 的 run 目录报成遗留 |
+| 02 | run 根的扫描不再因读不到的条目抛异常。`isDirectory()` 用 try/catch 兜任何 stat 失败，不枚举错误码：自指链接（`ELOOP`）只被跳过，旁边的可读 job 与无 meta 目录照旧 |
+
+票 02 是因票 01 的 fix round 上限用满而开的：cap 到点后我停手问你，你选了开新票 round 0。
+两张票跑在同一个 worktree、改同一批文件，事后无法拆成两个干净 commit，所以合成一个：
+subject 取票 01 标题，票 02 的改动搭在里面。两票的 Comments 都记了原因。
+
+复审轮次（都用 claude，base `main`）：票 01 三轮（用了 1、2 两轮 fix），票 02 两轮（用了 1 轮 fix）。
+**每一轮 reviewer 都自己造场景验证**，三轮报出的都是上一轮修复新引入的问题：
+
+1. 新遗留分支把 run 根每个条目都当 run 目录 → 普通文件被报成「dispatch 没跑完」。
+2. 改成只认 dirent 报告的目录 → 透过符号链接到达的 run 目录消失，而 `readMeta` 还读得到。
+3. 改成 `statSync` 跟随链接 → 自指链接抛 `ELOOP`，把 `runner.all()` 的所有调用方（`FleetStatus`、
+   `FleetCleanup(all: true)`、dispatch 默认选执行器）一起带走。
+
+教训：**“缩小一处误报”很容易换来一处漏报，而单测在新写的那一刻都绿。** 这三个洞全是
+reviewer 用同一个 probe 在 main 与本 worktree 上对照出来的，不是读代码读出来的。
+
+### provider 400 造成的真实 T5（同日）
+
+票 02 第一次 dispatch（`job_02_1791818229451_g8ip`）没进到活：tierflow 对任务回
+`status_code=400 任务请求不合法 (invalid_task_request)`，watcher 的 `continue` nudge 又换来
+第二个 400，agent 停在提示符，121s 宽限到点判 `contract_failed`。worktree 一个文件都没动，
+票停在 `claimed`，run 目录留下记录，随后按 round 0 重发成功（`job_02_1791818384402_z3er`）。
+
+这是 T5 路径第一次**无人为干预**地触发，也是 nudge 边界的现场证据：一次 `continue` 能救回
+偶发拒单的 provider，救不回持续拒单的。失败合理，但没有假 `complete`——fail-safe 按设计工作。
+另外：tierflow 的配额再吃紧一次（同日第二次），换 provider 的事已记在下面「tierflow 中转诊断」节。
 
 ## ticket 02 遗留的三条非阻塞观察（2026-10-12）
 
