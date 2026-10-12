@@ -48,6 +48,8 @@ export interface JobMeta {
 	id: string;
 	/** The ticket id, as the tracker file names it: "03", "12". */
 	ticket: string;
+	/** The ticket's title at dispatch time; names the Herdr agent and the tab. */
+	ticketTitle?: string;
 	/** Absolute path of the ticket file this job was dispatched for. */
 	ticketPath: string;
 	role: FleetRole;

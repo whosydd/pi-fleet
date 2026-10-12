@@ -40,6 +40,7 @@ import {
 	planPaneAction,
 	tabCloseArgv,
 	tabCreateArgv,
+	tabLabel,
 	workspaceForWorktree,
 	workspaceListArgv,
 	worktreeOpenArgv,
@@ -66,6 +67,8 @@ export type HarvestReport =
 export interface DispatchInput {
 	/** The ticket's own id, e.g. "03". */
 	ticketId: string;
+	/** The ticket's title, for the Herdr agent name and the tab label. */
+	ticketTitle: string;
 	ticketPath: string;
 	ticketText: string;
 	worktree: string;
@@ -164,6 +167,7 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 			schemaVersion: JOB_SCHEMA_VERSION,
 			id,
 			ticket: input.ticketId,
+			ticketTitle: input.ticketTitle,
 			ticketPath: input.ticketPath,
 			role: input.role,
 			executor: input.executor,
@@ -200,7 +204,7 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 	 * replaced, so a re-review reads where the first one did.
 	 */
 	async #place(meta: JobMeta, workspaceId: string): Promise<{ ok: true; pane: PaneTargets; agentName: string; createdTab: boolean } | { ok: false; error: string }> {
-		const label = `fleet: ${meta.ticket}`;
+		const label = tabLabel(meta.ticket, meta.ticketTitle ?? "");
 		const jobs = this.all();
 		const openTabId = jobs
 			.filter((job) => job.ticket === meta.ticket && job.pane?.workspaceId === workspaceId && job.paneClosedAt === undefined)
@@ -242,7 +246,7 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 			}
 		}
 
-		const name = existingAgent ?? agentName(meta.ticket, meta.id.split("_").at(-1) ?? nonce());
+		const name = existingAgent ?? agentName(meta.role, meta.ticket, meta.ticketTitle ?? "");
 		if (!existingAgent) {
 			const started = await this.#call(agentStartArgv(name, meta.executor, paneId, meta.model), AGENT_START_CALL_MS);
 			if (!started.ok) {

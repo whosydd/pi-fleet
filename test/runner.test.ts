@@ -90,6 +90,7 @@ function cleanup(h: Harness): void {
 function dispatchInput(h: Harness, overrides: Partial<DispatchInput> = {}): DispatchInput {
 	return {
 		ticketId: "03",
+		ticketTitle: "Token refresh",
 		ticketPath: h.ticketPath,
 		ticketText: TICKET,
 		worktree: h.worktree,
@@ -123,7 +124,7 @@ test("dispatch builds the run directory, opens a pane, and starts the executor",
 		// The pane is recorded, or a later harvest has nothing to ask about.
 		assert.equal(meta.pane?.tabId, "wF:t1");
 		assert.equal(meta.pane?.paneId, "wF:p1");
-		assert.match(meta.pane?.agentName ?? "", /^fleet-03-/);
+		assert.equal(meta.pane?.agentName, "implement-03-token-refresh");
 		assert.equal(meta.role, "implement");
 		assert.equal(meta.fixRound, 0);
 

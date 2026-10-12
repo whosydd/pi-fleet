@@ -231,6 +231,46 @@ commit 了（旧流程产物），所以 T1 不需要 pi 补 commit；新流程�
 
 ## 下次开工入口
 
-ticket 02 已就绪：`.scratch/manifest-exclusions/issues/01-collapse-repeated-exclusion-reasons.md`，
-worktree 已建于 `fleet/02-manifest-exclusions`（workspace w26）。用户 `/reload` 后 dispatch，
-然后不动键盘，验证全自动链路：wait 信号 → harvest → review → pi commit → 合并 → 清理。
+ticket 02 暂停（2026-10-12）：`.scratch/manifest-exclusions/issues/01-collapse-repeated-exclusion-reasons.md`
+的工作在 worktree `fleet-02-manifest-exclusions` 里已经做完（`npm run check` 90 绿），但两轮
+implement 都在写 contract 前撞上 tierflow 的 400，没能留下 `contract_complete`。用户正在
+把 codex 移出 tierflow 路由器，暂停在此。
+
+恢复时的两条路：
+
+1. `git -C <worktree> status --short` 确认改动仍在 → `git add -A` → 票设回
+   `ready-for-agent` → 直接派 claude review（base 取 worktree 起点 `3ec9e93`）。工作树是
+   review 的输入，不依赖 implement 的 contract。
+2. 或者先重跑一轮 implement，拿一个干净的 `contract_complete` 再 review。
+
+## tierflow 中转诊断（2026-10-12）
+
+codex 反复报 `status_code=400 任务请求不合法 (invalid_task_request)`。实测结论：
+
+- **tierflow 是多后端路由**：同一个 `model: tierflow_pro`，小请求返回
+  `Qwen3.8-Flash`，40k 与 400k 字符的请求返回 `DeepSeek-V4.1-Flash`。
+- 两个端点（`/v1/responses`、`/v1/chat/completions`）本身都通，最小请求都成功，
+  所以不是端点或密钥问题。
+- 判断：请求被路由到对 OpenAI Responses + tool calling 支持不全的后端时被拒；
+  手动 `continue` 或重发都能过——重发等于重新掷一次路由。
+- 规避方向是换 provider。pi 配置里的 `sub2api-openai`（`gpt-6-luna` @
+  `http://192.168.5.5:8080/v1`）实测是原生 Responses 端点，其响应自带
+  `instructions: "You are Codex, a coding agent based on GPT-5…"`。
+
+## fix round 复用同一 executor（2026-10-12）
+`planPaneAction` 的 exec 分支不再堆叠新 pane：一个 ticket 一个 executor pane，fix round
+re-prompt 首轮的 executor（`exec[0]`），保留它自己的 context。`occupancyOf` 改为按 pane
+去重（同一 pane 现在会被多个 job 指向），`TAB_FANOUT_LIMIT` 随堆叠行为一起删除。
+提交 `f2c305e`，`npm run check` 90 通过。
+
+## agent 与 tab 命名（2026-10-12）
+
+`fleet-01-4myt` 与 `fleet: 01` 对看侧边栏的人没有信息量。现在：
+
+- **agent**：`<role>-<ticket id>-<标题实词>`，例 `implement-02-manifest-explains`、
+  `review-02-manifest-explains`。role 说清谁在干，标题实词区分同一 feature 的不同 ticket。
+- **tab label**：`<nn> <标题>`。Herdr 按侧边栏宽度截断 label，票号在前才能活下来。
+- 停用词（the/a/its/must/…）直接跳过；按词边界截断，总长 ≤ 32（Herdr 的命名规则）。
+- fix round 复用同一 executor，所以一个 ticket 每个 role 只有一个 agent 名。
+
+`npm run check` 91 通过。

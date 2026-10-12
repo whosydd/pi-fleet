@@ -176,19 +176,48 @@ export function parseAgentGet(stdout: string): AgentRead | undefined {
 // ---------------------------------------------------------------------------
 // Naming and lookup
 
+/** Words a name can drop: they cost budget and say nothing about the work. */
+const NAME_STOP_WORDS = new Set([
+	"a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "into", "is", "it", "its",
+	"must", "no", "not", "of", "on", "once", "or", "that", "the", "then", "this", "to", "was", "what", "when", "will", "with",
+]);
+
+/** As many leading words of a title as fit the budget, joined with hyphens. */
+function slugWords(title: string, budget: number): string {
+	const words = title.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== "" && !NAME_STOP_WORDS.has(word));
+	const kept: string[] = [];
+	for (const word of words) {
+		if ([...kept, word].join("-").length > budget) break;
+		kept.push(word);
+	}
+	return kept.join("-");
+}
+
 /**
- * A Herdr agent name for one job: `fleet-<ticket>-<nonce>`, kept inside Herdr's
- * `[a-z][a-z0-9_-]{0,31}` rule. The nonce keeps two dispatches of one ticket
- * (a review while a fix round runs) from colliding on one live name.
+ * A Herdr agent name for one job, built from what the job is.
+ *
+ * Herdr requires `[a-z][a-z0-9_-]{0,31}` and a name unique among live agents.
+ * The shape is `<role>-<ticket id>-<words of the title>`, so the sidebar says
+ * which harness works and on what. A fix round reuses the executor's pane, so a
+ * ticket keeps one name per role instead of one per job, and the title words are
+ * what tell two tickets of one feature apart.
  */
-export function agentName(ticket: string, nonce: string): string {
-	const slug = ticket
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, "-")
-		.replace(/^[-_]+/, "")
-		.replace(/[-_]+$/, "");
-	const raw = `fleet-${slug === "" ? "job" : slug}-${nonce}`.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
-	return /^[a-z]/.test(raw) ? raw : `f${raw}`.slice(0, 32);
+export function agentName(role: FleetRole, ticketId: string, title: string): string {
+	const prefix = `${role}-${ticketId}-`;
+	const name = `${prefix}${slugWords(title, 32 - prefix.length)}`.replace(/[-_]+$/, "");
+	return /^[a-z]/.test(name) ? name : `f${name}`;
+}
+
+/**
+ * The Herdr tab label for one ticket: the id first, then the title.
+ *
+ * Herdr truncates the label to the sidebar's width, so the id has to survive
+ * that: a reader sees `02 the manifest expl…` and knows which ticket the tab
+ * belongs to without a second look.
+ */
+export function tabLabel(ticketId: string, title: string): string {
+	const trimmed = title.trim();
+	return trimmed === "" ? `ticket ${ticketId}` : `${ticketId} ${trimmed}`;
 }
 
 /**

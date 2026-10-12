@@ -14,6 +14,7 @@ import {
 	workspaceForWorktree,
 	worktreeOpenArgv,
 	zoneOf,
+	tabLabel,
 } from "../extensions/lib/herdr.ts";
 import type { JobMeta } from "../extensions/lib/types.ts";
 
@@ -32,16 +33,29 @@ test("agent wait asks Herdr for a state change, not for a verdict", () => {
 	assert.deepEqual(agentWaitArgv("fleet-03-ab", 300_000), ["agent", "wait", "fleet-03-ab", "--timeout", "300000"]);
 });
 
-test("agent names stay inside Herdr's alphabet, whichever ticket they come from", () => {
-	for (const ticket of ["03", "23-gitignore", "Feature: Big Change!", "0"]) {
-		const name = agentName(ticket, "ab12");
-		assert.match(name, /^[a-z][a-z0-9_-]{0,31}$/, `${ticket} -> ${name}`);
+test("agent names say the role and the ticket, and stay inside Herdr's alphabet", () => {
+	assert.equal(agentName("implement", "02", "The manifest explains its repeated exclusions once"), "implement-02-manifest-explains");
+	assert.equal(agentName("review", "02", "The manifest explains its repeated exclusions once"), "review-02-manifest-explains");
+	// A title with no usable word still yields a legal name.
+	assert.equal(agentName("implement", "02", ""), "implement-02");
+	for (const [role, id, title] of [
+		["implement", "01", "The headless load smoke test must judge what it loads"],
+		["review", "07", "a"],
+		["implement", "123", "Ünïcödé ✓ title"],
+		["review", "0", ""],
+	] as const) {
+		const name = agentName(role, id, title);
+		assert.match(name, /^[a-z][a-z0-9_-]{0,31}$/, `${role}/${id} -> ${name}`);
 		assert.ok(name.length <= 32, `${name} is ${name.length} characters`);
 	}
-	// A ticket whose slug empties out still yields a legal name.
-	assert.match(agentName("!!!", "zz"), /^[a-z]/);
-	// Two dispatches of one ticket must not collide on one live name.
-	assert.notEqual(agentName("03", "aaaa"), agentName("03", "bbbb"));
+	// A long title stops at a word boundary instead of mid-word, and stays inside
+	// Herdr's 32-character rule.
+	assert.equal(agentName("implement", "01", "The headless load smoke test must judge what it loads"), "implement-01-headless-load-smoke");
+});
+
+test("the tab label leads with the ticket id, so a truncated title still names the ticket", () => {
+	assert.equal(tabLabel("02", "The manifest explains its repeated exclusions once"), "02 The manifest explains its repeated exclusions once");
+	assert.equal(tabLabel("07", "   "), "ticket 07");
 });
 
 test("the response parsers reject shapes they do not recognise instead of guessing", () => {

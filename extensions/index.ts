@@ -287,6 +287,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 
 			const outcome = await runner.dispatch({
 				ticketId: ticket.id,
+				ticketTitle: ticket.title,
 				ticketPath,
 				ticketText: readTicketText(ticketPath),
 				worktree,
