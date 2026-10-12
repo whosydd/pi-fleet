@@ -124,12 +124,12 @@ test("dispatch builds the run directory, opens a pane, and starts the executor",
 		// The pane is recorded, or a later harvest has nothing to ask about.
 		assert.equal(meta.pane?.tabId, "wF:t1");
 		assert.equal(meta.pane?.paneId, "wF:p1");
-		assert.equal(meta.pane?.agentName, "implement-03-token-refresh");
+		assert.equal(meta.pane?.agentName, "implement-03");
 		assert.equal(meta.role, "implement");
 		assert.equal(meta.fixRound, 0);
 
 		const calls = h.logCalls();
-		assert.deepEqual(calls.map((call) => call.slice(0, 2).join(" ")), ["workspace list", "tab create", "agent start", "agent prompt"]);
+		assert.deepEqual(calls.map((call) => call.slice(0, 2).join(" ")), ["workspace list", "pane list", "agent start", "agent prompt"]);
 		assert.match(calls[3]!.join(" "), /\/runs\/job_03_/);
 	} finally {
 		cleanup(h);
@@ -176,8 +176,22 @@ test("a worktree whose workspace Herdr closed is reopened, and the pane lands th
 		if (!outcome.ok) return;
 		assert.equal(outcome.meta.pane?.workspaceId, "wN");
 		const calls = h.logCalls();
-		assert.deepEqual(calls.slice(0, 3).map((call) => call.slice(0, 2).join(" ")), ["workspace list", "worktree open", "tab create"]);
-		assert.equal(calls[2]![calls[2]!.indexOf("--workspace") + 1], "wN");
+		assert.deepEqual(calls.slice(0, 4).map((call) => call.slice(0, 2).join(" ")), ["workspace list", "worktree open", "pane list", "tab create"]);
+		assert.equal(calls[3]![calls[3]!.indexOf("--workspace") + 1], "wN");
+	} finally {
+		cleanup(h);
+	}
+});
+
+test("a workspace without a free first pane gets a new tab", async () => {
+	const h = harness({ FAKE_HERDR_NO_ROOT_PANE: "1" });
+	try {
+		claimTicket(h.ticketPath);
+		const outcome = await new Runner(h.settings).dispatch(dispatchInput(h));
+		assert.equal(outcome.ok, true, outcome.ok ? "" : outcome.error);
+		if (!outcome.ok) return;
+		assert.equal(h.logCalls().filter((call) => call[0] === "tab" && call[1] === "create").length, 1);
+		assert.equal(outcome.meta.pane?.paneId, "wF:p1");
 	} finally {
 		cleanup(h);
 	}
@@ -204,7 +218,8 @@ test("a fix round continues in the executor that built the ticket", async () => 
 		const calls = h.logCalls();
 		assert.equal(calls.filter((call) => call[0] === "agent" && call[1] === "start").length, 1, "one codex, re-prompted");
 		assert.equal(calls.filter((call) => call[0] === "pane" && call[1] === "split").length, 0);
-		assert.equal(calls.filter((call) => call[0] === "tab" && call[1] === "create").length, 1);
+		// No tab was created: the first job took the pane herdr left in the workspace.
+		assert.equal(calls.filter((call) => call[0] === "tab" && call[1] === "create").length, 0);
 	} finally {
 		cleanup(h);
 	}
@@ -251,10 +266,10 @@ test("a review reuses the pane the first review used, and never a second tab", a
 		assert.equal(secondReview.ok, true, secondReview.ok ? "" : secondReview.error);
 		if (!secondReview.ok) return;
 
-		// One tab for the ticket. One tab create across all three jobs.
+		// One tab for the ticket, and it is the one herdr opened with the worktree.
 		assert.equal(firstReview.meta.pane?.tabId, "wF:t1");
 		assert.equal(secondReview.meta.pane?.tabId, "wF:t1");
-		assert.equal(h.logCalls().filter((call) => call[0] === "tab" && call[1] === "create").length, 1);
+		assert.equal(h.logCalls().filter((call) => call[0] === "tab" && call[1] === "create").length, 0);
 		// The re-review is a re-prompt of the standing reviewer, not a second agent.
 		const starts = h.logCalls().filter((call) => call[0] === "agent" && call[1] === "start");
 		assert.equal(starts.length, 2, "one codex for the build, one claude for the review");

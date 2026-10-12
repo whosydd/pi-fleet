@@ -44,7 +44,7 @@ import { defaultExecutor } from "./lib/selection.ts";
 import { INSTALL_SCRIPT } from "./lib/skills.ts";
 import { claimTicket, READY, setStatus } from "./lib/tickets.ts";
 import { isExecutorKind, readSettings, type FleetRole, type JobMeta } from "./lib/types.ts";
-import { wakeMessage, WATCH_THROTTLE_MS, WATCH_WAIT_SLICE_MS } from "./lib/watch.ts";
+import { NUDGE_TEXT, nudgeStep, wakeMessage, WATCH_THROTTLE_MS, WATCH_WAIT_SLICE_MS, type NudgeState } from "./lib/watch.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -158,6 +158,8 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	 * directory and the contract file still decides whether the work landed.
 	 */
 	const watched = new Map<string, JobMeta>();
+	/** Per-job nudge bookkeeping: an idle executor without a contract gets a word. */
+	const nudges = new Map<string, NudgeState>();
 
 	const sleep = (ms: number) =>
 		new Promise<void>((resolve) => {
@@ -183,9 +185,14 @@ export default function fleetExtension(pi: ExtensionAPI) {
 
 			const report = await runner.harvest(id);
 			if (report.kind === "running") {
+				const step = nudgeStep(nudges.get(id), report.status, Date.now());
+				if (step.state) nudges.set(id, step.state);
+				else nudges.delete(id);
+				if (step.nudge && report.meta.pane?.agentName) await runner.promptAgent(report.meta.pane.agentName, NUDGE_TEXT);
 				await sleep(WATCH_THROTTLE_MS);
 				continue;
 			}
+			nudges.delete(id);
 			const meta = watched.get(id);
 			// A human may have harvested this job while the wait was open. Then the
 			// verdict is already read, and a second wake-up would be a false alarm.

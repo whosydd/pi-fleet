@@ -32,6 +32,12 @@ if (group === "workspace" && verb === "list") {
 	// A closed worktree workspace is restored here. FAKE_HERDR_OPEN_FAIL simulates a
 	// path Herdr refuses to open, which is the only case dispatch still rejects.
 	emit(process.env.FAKE_HERDR_OPEN_FAIL === "1" ? {} : { already_open: false, workspace: { workspace_id: process.env.FAKE_HERDR_OPEN_WORKSPACE ?? workspace } });
+} else if (group === "pane" && verb === "list") {
+	// The pane `herdr worktree create` leaves behind: one tab, a shell in it.
+	// FAKE_HERDR_NO_ROOT_PANE simulates a workspace without it, which is what makes
+	// the caller fall back to `tab create`.
+	const panes = process.env.FAKE_HERDR_NO_ROOT_PANE === "1" ? [] : [{ pane_id: `${workspace}:p1`, tab_id: `${workspace}:t1`, workspace_id: workspace, agent: null }];
+	emit({ panes });
 } else if (group === "tab" && verb === "create") {
 	emit({ tab: { tab_id: `${workspace}:t1` }, root_pane: { pane_id: `${workspace}:p1` } });
 } else if (group === "pane" && verb === "split") {

@@ -32,6 +32,44 @@ export const WATCH_WAIT_SLICE_MS = 300_000;
 export const WATCH_THROTTLE_MS = 15_000;
 
 /**
+ * How long an idle executor waits before the watcher nudges it.
+ *
+ * An executor that stopped at its prompt with no contract is usually waiting on
+ * a request its provider refused: the TUI shows the error and the run stalls
+ * until someone types another word. The idle grace would settle that job as
+ * failed, while one `continue` has resumed every such run by hand.
+ */
+export const WATCH_NUDGE_AFTER_MS = 15_000;
+
+/** How many nudges one job gets before the idle grace is allowed to settle it. */
+export const WATCH_NUDGE_LIMIT = 3;
+
+/** The line a stalled executor receives. */
+export const NUDGE_TEXT = "continue";
+
+/** One job's nudge bookkeeping. */
+export interface NudgeState {
+	/** When the current idle stretch started. */
+	since: number;
+	/** How many nudges this job has had. */
+	count: number;
+}
+
+/**
+ * Whether an idle executor gets nudged now, and the state to keep.
+ *
+ * Pure so the timing rule tests without a pane: an idle stretch shorter than
+ * the delay only starts the clock, an executor that went back to work clears
+ * it, and the count stops the nudges before they become a loop of their own.
+ */
+export function nudgeStep(state: NudgeState | undefined, status: string | undefined, now: number): { nudge: boolean; state: NudgeState | undefined } {
+	if (status !== "idle") return { nudge: false, state: undefined };
+	const current = state ?? { since: now, count: 0 };
+	if (now - current.since < WATCH_NUDGE_AFTER_MS || current.count >= WATCH_NUDGE_LIMIT) return { nudge: false, state: current };
+	return { nudge: true, state: { since: now, count: current.count + 1 } };
+}
+
+/**
  * The user message that wakes the session.
  *
  * It names the job and the verdict, and stops there. The orchestrator reads the

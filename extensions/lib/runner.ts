@@ -31,8 +31,10 @@ import {
 	agentStartArgv,
 	agentWaitArgv,
 	occupancyOf,
+	paneListArgv,
 	paneSplitArgv,
 	parseAgentGet,
+	parsePaneList,
 	parsePaneSplit,
 	parseTabCreate,
 	parseWorkspaceList,
@@ -217,13 +219,23 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 		let existingAgent: string | undefined;
 
 		if (action.kind === "newTab" || !openTabId) {
-			const created = await this.#call(tabCreateArgv(workspaceId, label, meta.worktree), CALL_MS);
-			if (!created.ok) return { ok: false, error: created.error };
-			const tab = parseTabCreate(created.stdout);
-			if (!tab) return { ok: false, error: "herdr tab create returned no tab or pane id" };
-			tabId = tab.tabId;
-			paneId = tab.paneId;
-			createdTab = true;
+			// `herdr worktree create` already opened one tab with a shell in it. A job
+			// that creates its own tab leaves that one empty forever, so the first job in
+			// a workspace takes the pane that is already there; only a workspace the
+			// fleet has used before gets a new tab.
+			const root = await this.#freeRootPane(workspaceId, jobs);
+			if (root) {
+				tabId = root.tabId;
+				paneId = root.paneId;
+			} else {
+				const created = await this.#call(tabCreateArgv(workspaceId, label, meta.worktree), CALL_MS);
+				if (!created.ok) return { ok: false, error: created.error };
+				const tab = parseTabCreate(created.stdout);
+				if (!tab) return { ok: false, error: "herdr tab create returned no tab or pane id" };
+				tabId = tab.tabId;
+				paneId = tab.paneId;
+				createdTab = true;
+			}
 		} else if (action.kind === "reuse") {
 			tabId = openTabId;
 			paneId = action.paneId;
@@ -251,7 +263,7 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 			}
 		}
 
-		const name = existingAgent ?? agentName(meta.role, meta.ticket, meta.ticketTitle ?? "");
+		const name = existingAgent ?? agentName(meta.role, meta.ticket);
 		if (!existingAgent) {
 			const started = await this.#call(agentStartArgv(name, meta.executor, paneId, meta.model), AGENT_START_CALL_MS);
 			if (!started.ok) {
@@ -407,6 +419,36 @@ const task = buildTask({ ticket: input.ticketId, role: input.role, briefPath: pa
 	async waitAgent(name: string, timeoutMs: number): Promise<AgentRead | undefined> {
 		const waited = await this.#call(agentWaitArgv(name, timeoutMs), timeoutMs + 30_000);
 		return waited.ok ? parseAgentGet(waited.stdout) : undefined;
+	}
+
+	/**
+	 * The workspace's own first pane, when nothing fleet-owned sits in it.
+	 *
+	 * `herdr worktree create` opens the worktree with one tab and a shell in it.
+	 * That pane is the natural place for the first executor: taking it keeps the
+	 * sidebar free of the empty tab a `tab create` would leave behind. Returns
+	 * undefined when the pane is gone or already busy, and the caller makes a tab.
+	 */
+	async #freeRootPane(workspaceId: string, jobs: JobMeta[]): Promise<{ tabId: string; paneId: string } | undefined> {
+		const wanted = `${workspaceId}:p1`;
+		const taken = new Set(jobs.filter((job) => job.paneClosedAt === undefined).map((job) => job.pane?.paneId));
+		if (taken.has(wanted)) return undefined;
+		const listed = await this.#call(paneListArgv(), CALL_MS);
+		if (!listed.ok) return undefined;
+		const pane = parsePaneList(listed.stdout)?.find((entry) => entry.pane_id === wanted && entry.workspace_id === workspaceId);
+		if (pane?.tab_id === undefined || (pane.agent ?? null) !== null) return undefined;
+		return { tabId: pane.tab_id, paneId: wanted };
+	}
+
+	/**
+	 * Send one short line to an executor.
+	 *
+	 * A provider that refuses a request leaves the TUI at its prompt. Re-sending the
+	 * last request is what resumed every such run by hand, so the watcher does it on
+	 * a timer instead of waiting for a human to type the next word.
+	 */
+	async promptAgent(name: string, text: string): Promise<boolean> {
+		return (await this.#call(agentPromptArgv(name, text), PROMPT_CALL_MS)).ok;
 	}
 
 	/** The agent's reported lifecycle state, or undefined when Herdr no longer knows the name. */

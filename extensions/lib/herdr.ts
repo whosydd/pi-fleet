@@ -64,6 +64,11 @@ export function workspaceListArgv(): string[] {
 	return ["workspace", "list"];
 }
 
+/** `herdr pane list` argv: the panes of every workspace, with the agent in each. */
+export function paneListArgv(): string[] {
+	return ["pane", "list"];
+}
+
 /**
  * `herdr worktree open` argv: restores the workspace of a worktree that has lost
  * it.
@@ -148,6 +153,21 @@ export function parseWorktreeOpen(stdout: string): string | undefined {
 	return typeof id === "string" && id !== "" ? id : undefined;
 }
 
+/** One pane as `herdr pane list` reports it. */
+export interface PaneEntry {
+	pane_id?: string;
+	tab_id?: string;
+	workspace_id?: string;
+	/** The agent occupying the pane, or null when the pane holds a plain shell. */
+	agent?: string | null;
+}
+
+/** The panes `herdr pane list` reported, or undefined when the output is not that shape. */
+export function parsePaneList(stdout: string): PaneEntry[] | undefined {
+	const panes = (parseJson(stdout) as { result?: { panes?: unknown } } | undefined)?.result?.panes;
+	return Array.isArray(panes) ? (panes as PaneEntry[]) : undefined;
+}
+
 /** The tab and pane ids a `herdr tab create` response reported, or undefined. */
 export function parseTabCreate(stdout: string): { tabId: string; paneId: string } | undefined {
 	const result = (parseJson(stdout) as { result?: { tab?: { tab_id?: string }; root_pane?: { pane_id?: string } } } | undefined)?.result;
@@ -176,36 +196,20 @@ export function parseAgentGet(stdout: string): AgentRead | undefined {
 // ---------------------------------------------------------------------------
 // Naming and lookup
 
-/** Words a name can drop: they cost budget and say nothing about the work. */
-const NAME_STOP_WORDS = new Set([
-	"a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "into", "is", "it", "its",
-	"must", "no", "not", "of", "on", "once", "or", "that", "the", "then", "this", "to", "was", "what", "when", "will", "with",
-]);
-
-/** As many leading words of a title as fit the budget, joined with hyphens. */
-function slugWords(title: string, budget: number): string {
-	const words = title.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== "" && !NAME_STOP_WORDS.has(word));
-	const kept: string[] = [];
-	for (const word of words) {
-		if ([...kept, word].join("-").length > budget) break;
-		kept.push(word);
-	}
-	return kept.join("-");
-}
-
 /**
- * A Herdr agent name for one job, built from what the job is.
+ * A Herdr agent name for one job: the role, then the ticket.
  *
  * Herdr requires `[a-z][a-z0-9_-]{0,31}` and a name unique among live agents.
- * The shape is `<role>-<ticket id>-<words of the title>`, so the sidebar says
- * which harness works and on what. A fix round reuses the executor's pane, so a
- * ticket keeps one name per role instead of one per job, and the title words are
- * what tell two tickets of one feature apart.
+ * `implement-02` and `reviewer-02` say who works and on what, and a fix round
+ * reuses its pane, so one ticket keeps one name per role.
  */
-export function agentName(role: FleetRole, ticketId: string, title: string): string {
-	const prefix = `${role}-${ticketId}-`;
-	const name = `${prefix}${slugWords(title, 32 - prefix.length)}`.replace(/[-_]+$/, "");
-	return /^[a-z]/.test(name) ? name : `f${name}`;
+export function agentName(role: FleetRole, ticketId: string): string {
+	const who = role === "review" ? "reviewer" : "implement";
+	const id = ticketId
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, "-")
+		.replace(/^[-_]+|[-_]+$/g, "");
+	return (id === "" ? who : `${who}-${id}`).slice(0, 32);
 }
 
 /**

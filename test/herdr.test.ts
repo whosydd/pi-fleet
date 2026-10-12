@@ -5,7 +5,9 @@ import {
 	agentWaitArgv,
 	isAgentWaiting,
 	occupancyOf,
+	paneListArgv,
 	parseAgentGet,
+	parsePaneList,
 	parsePaneSplit,
 	parseTabCreate,
 	parseWorkspaceList,
@@ -33,24 +35,26 @@ test("agent wait asks Herdr for a state change, not for a verdict", () => {
 	assert.deepEqual(agentWaitArgv("fleet-03-ab", 300_000), ["agent", "wait", "fleet-03-ab", "--timeout", "300000"]);
 });
 
-test("agent names say the role and the ticket, and stay inside Herdr's alphabet", () => {
-	assert.equal(agentName("implement", "02", "The manifest explains its repeated exclusions once"), "implement-02-manifest-explains");
-	assert.equal(agentName("review", "02", "The manifest explains its repeated exclusions once"), "review-02-manifest-explains");
-	// A title with no usable word still yields a legal name.
-	assert.equal(agentName("implement", "02", ""), "implement-02");
-	for (const [role, id, title] of [
-		["implement", "01", "The headless load smoke test must judge what it loads"],
-		["review", "07", "a"],
-		["implement", "123", "Ünïcödé ✓ title"],
-		["review", "0", ""],
-	] as const) {
-		const name = agentName(role, id, title);
+test("agent names are the role and the ticket, inside Herdr's alphabet", () => {
+	assert.equal(agentName("implement", "02"), "implement-02");
+	assert.equal(agentName("review", "02"), "reviewer-02");
+	// A ticket id that empties out still yields a legal name.
+	assert.equal(agentName("review", ""), "reviewer");
+	for (const [role, id] of [["implement", "01"], ["review", "07"], ["implement", "23-gitignore"], ["review", ""]] as const) {
+		const name = agentName(role, id);
 		assert.match(name, /^[a-z][a-z0-9_-]{0,31}$/, `${role}/${id} -> ${name}`);
 		assert.ok(name.length <= 32, `${name} is ${name.length} characters`);
 	}
-	// A long title stops at a word boundary instead of mid-word, and stays inside
-	// Herdr's 32-character rule.
-	assert.equal(agentName("implement", "01", "The headless load smoke test must judge what it loads"), "implement-01-headless-load-smoke");
+});
+
+test("pane list is read as panes, with the agent in each", () => {
+	assert.deepEqual(paneListArgv(), ["pane", "list"]);
+	const panes = parsePaneList('{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":null}]}}');
+	assert.equal(panes?.length, 1);
+	assert.equal(panes?.[0]?.tab_id, "w1:t1");
+	assert.equal(panes?.[0]?.agent ?? null, null);
+	assert.equal(parsePaneList('{"result":{}}'), undefined);
+	assert.equal(parsePaneList("not json"), undefined);
 });
 
 test("the tab label leads with the ticket id, so a truncated title still names the ticket", () => {

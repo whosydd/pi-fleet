@@ -10,7 +10,7 @@ Replace each repeated sentence with one shared explanation, so a reader meets th
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Each of the three repeated explanations appears once, and every entry that used it still points at it.
 - [ ] Entries whose reason is unique keep their own text.
