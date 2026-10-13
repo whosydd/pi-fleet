@@ -39,14 +39,14 @@ test("this package ships exactly one skill, and it is not from upstream", () => 
 test("the names a role uses are the names the manifest records", () => {
 	const named = [...new Set([...ROLE_SKILLS.implement, ...ROLE_SKILLS.review])].sort();
 	assert.deepEqual(named, ["code-review", "tdd"]);
-	// The task text names these skills; `execution` records the upstream paths those
+	// The task names these skills; `execution` records the upstream paths those
 	// names come from. Nothing compares either side to upstream (see AGENTS.md), so
 	// this test pins the half the package can check offline: that the two agree.
 	assert.deepEqual(manifest.execution.map((path) => path.split("/").at(-1)).sort(), named);
 });
 
 test("the upstream implementation skill is not named, because it would reinstate the self-review", () => {
-	// Its six instructions are covered by the task text and the contract, except
+	// Its six instructions are covered by the task and the contract, except
 	// the one that invokes the upstream review skill inside the run that wrote the
 	// code — which is exactly what the cross-harness review exists to avoid.
 	assert.equal([...ROLE_SKILLS.implement, ...ROLE_SKILLS.review].includes("implement"), false);

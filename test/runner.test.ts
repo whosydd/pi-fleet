@@ -157,7 +157,7 @@ test("a refused prompt fails readably, keeps the pane, and leaves no run directo
 		assert.ok(error.length < 1000, `error was ${error.length} characters`);
 
 		// The task is one argv entry, and a long one is abbreviated rather than
-		// quoted: the error carries no task text.
+		// quoted: the error carries none of the task.
 		assert.match(error, /argument of \d+ characters/);
 		assert.doesNotMatch(error, /Read the brief at:/);
 		assert.doesNotMatch(error, /One refresh per expiry\./);

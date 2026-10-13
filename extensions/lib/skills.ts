@@ -9,7 +9,7 @@
  *     a pinned copy.
  *   - The upstream **execution** skills are not shipped here either. Codex and
  *     Claude install them on their own machines, and this package names them in
- *     the task text instead of handing over a path. Shipping a second copy made
+ *     the task instead of handing over a path. Shipping a second copy made
  *     the executor load two revisions of one skill at once.
  *   - Only `skills/fleet` — this package's own orchestration loop — ships as a
  *     skill, and it is the only one the package manifest declares.

@@ -1,5 +1,9 @@
 # Development Rules
 
+The vocabulary this file uses — upstream, planning set, execution set, executor, harness,
+ticket, job, claim, settled, contract — is defined in `GLOSSARY.md`. Define a term there
+before using it in a new sense here.
+
 ## Commands
 
 - `npm run check` — typecheck + tests + headless load check + planning filter. Run before committing.
@@ -24,7 +28,7 @@ There is no `skills/planning/` and no `skills/execution/`. The planning set is i
 
 ## Invariants
 
-- **The skill split is the boundary.** `implement` and the upstream review skill must never be loadable by pi. A harness that can load `implement` will implement instead of dispatching, so the split is enforced by what is loadable, not by an instruction.
+- **The skill split is the boundary.** `implement` and the upstream review skill must never be loadable by pi. A session that can load `implement` will implement instead of dispatching, so the split is enforced by what is loadable, not by an instruction.
 - **This package ships no upstream skill.** The planning set is installed into the project so it tracks upstream. The execution set comes from the executor's own harness and is named, never pointed at: a second copy puts two revisions of one skill in one context. `ROLE_SKILLS` in `brief.ts` is the only place a skill name is written.
 - **The review method is text in this package, not a file from upstream.** The two axes, the rule against merging them, and the anti-recursion guard live in `brief.ts`. Upstream has not shipped the guard, and both of its installs run the axes in sub-agents without forbidding more.
 - **A filter pattern that matches nothing fails silently.** pi strips no leading `./`, and reports no diagnostic when a pattern matches no file. The list comes from `skills/manifest.json`, and `check-planning` proves the committed filter still matches it.

@@ -1,10 +1,10 @@
 /**
- * The task text an executor receives, and the brief file it reads.
+ * The task an executor receives, and the brief file it reads.
  *
  * Pure: strings in, string out. `runner.ts` writes what these return.
  *
  * This module is where the boundary between pi and an executor is spelled out.
- * An executor sees only two things: this task text, and the brief file it points
+ * An executor sees only two things: this task, and the brief file it points
  * at. It never sees the parent conversation, so every rule it must obey has to be
  * here.
  *
@@ -63,7 +63,7 @@ export interface TaskInput {
  * them.
  *
  * These are named, never pointed at: a path would make the executor read a copy
- * that is not the one its harness indexed, and the task text below is complete
+ * that is not the one its harness indexed, and the task below is complete
  * without either.
  */
 export const ROLE_SKILLS: Record<FleetRole, string[]> = {
@@ -116,7 +116,7 @@ const CONTRACT_RULE =
 	"When done, use your file tools to write the contract as ONE JSON object into the file named below. Nothing else may be in that file: no prose, no code fence, no trailing note. It must match this schema, and it must carry the ticket id exactly as this job names it.";
 
 /**
- * The task text. It points at the brief rather than carrying it, so the brief
+ * The task. It points at the brief rather than carrying it, so the brief
  * stays the one place the ticket content lives.
  */
 export function buildTask(input: TaskInput): string {

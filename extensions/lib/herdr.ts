@@ -117,7 +117,7 @@ export function agentStartArgv(name: string, kind: ExecutorKind, paneId: string,
 	return argv;
 }
 
-/** `herdr agent prompt` argv. The task text is one argument; no shell sees it. */
+/** `herdr agent prompt` argv. The task is one argument; no shell sees it. */
 export function agentPromptArgv(name: string, task: string): string[] {
 	return ["agent", "prompt", name, task];
 }

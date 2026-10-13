@@ -368,3 +368,32 @@ re-prompt 首轮的 executor（`exec[0]`），保留它自己的 context。`occu
   `session_shutdown` 清空，唤醒那一步加了保护。否则 `/reload` 之后旧 watcher 拿着失效的
   `pi` 抛异常，异常落在无人接管的 async 循环里（`938a1d0`）。smoke 建的是 headless
   session，所以它在读设置的那次 reload 之前就把 watcher 关掉。
+
+## 术语与配置面审计（2026-10-12）
+
+起因：`/matt-pocock-skills-bootstrap` 的命令描述写着 "Install the upstream planning
+skills into this project, filtered, without touching global settings"——说不出 upstream 是
+谁、planning 指哪十个、filtered 过滤掉什么。
+
+- **建了 `GLOSSARY.md`**（本仓 `docs/agents/domain.md` 声明的位置；`domain-modeling` skill
+  的规则是"第一个术语确定时就建，不要攒"，现在正是那个时刻）。24 个词条，每条带
+  `_Avoid_` 杀掉同义轮换：upstream 全局未定义；planning/execution 的名字描述的是"活动"
+  而真实含义是"谁有权加载"；harness 与 executor 曾是两个词一个所指（按你的决定**分开
+  保留**：harness = executor 跑的那个 CLI 产品及它自带的那套 skill，executor = 跑一个 job
+  的那个 agent）；task 与 brief 两个 artefact 名字相近；tab 与 pane 在文档里混用。
+- **命令描述重写**：点名来源仓库、点名被挡掉的两个 skill（`tdd`、`code-review`）、并说
+  出为什么要挡（否则编排者会去实现而不派发）。过滤这件事交给 `description` 字段承担，
+  它就在命令面板名字旁边。
+- **删掉三个假旋钮**：`PI_FLEET_AGENT_START_MS`、`PI_FLEET_CODEX_BIN`、`PI_FLEET_CLAUDE_BIN`
+  在 `FleetSettings`、`readSettings`、README 的 Configuration 表、`index.ts` 头部注释里
+  都登记着，但生产代码一次都没读过——Herdr 用 `--kind` 自己启动 executor，本包从不 spawn
+  `codex`/`claude`；启动等待用的是 `herdr.ts` 的常量，而且 pi 自己的 exec 死线要包住它。
+  文档与代码里一并删掉，README 加一段解释为什么不可配。
+- **修了 `index.ts` 头部一句与事实相反的话**：它写着"两个 skill 集随本包发布，`planning`
+  在 manifest 里声明所以 pi 加载，`execution` 不声明所以 pi 看不到，扩展把绝对路径交给
+  executor"。实际早已相反：本包不发任何上游 skill，planning 是从上游装进项目，execution
+  按名字引用、从不给路径。
+- **`task` 与 "task text" 归一**：代码注释与 README 里一律用 `task`。
+
+未做：`docs/agents/issue-tracker.md` 里 "issue" 与 "ticket" 仍混用——那份文档是上游模板的
+逐字节副本，由 ticket 05 负责重写，届时一并统一。`.scratch/` 下的历史票保留原文。

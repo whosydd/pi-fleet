@@ -85,16 +85,13 @@ export interface FleetSettings {
 	runsDir: string;
 	/** Fix rounds past this cap are refused in code, never left to the model's discretion. */
 	maxFixRound: number;
-	/** How long to wait for an executor TUI to come up before giving up on the pane. */
-	agentStartMs: number;
 	/** How long an agent may sit idle with no contract before the job is reported as failed. */
 	idleGraceMs: number;
 	/** Block git stash, git commit --amend, and force push (PI_FLEET_GIT_GUARD=off disables). */
 	gitGuard: boolean;
 	/** Wake the session with a user message when a job settles (PI_FLEET_AUTO_CONTINUE=off disables). */
 	autoContinue: boolean;
-	codexBin: string;
-	claudeBin: string;
+	/** Herdr's binary. The executor's own binary is not here: Herdr starts it from the agent's kind. */
 	herdrBin: string;
 }
 
@@ -119,12 +116,9 @@ export function readSettings(env: NodeJS.ProcessEnv = process.env, cwd: string =
 		// belongs in pi's directory.
 		runsDir: resolve(cwd, env.PI_FLEET_RUNS_DIR || ".pi/fleet/runs"),
 		maxFixRound: parsePositive(env.PI_FLEET_MAX_FIX_ROUND, 2),
-		agentStartMs: parsePositive(env.PI_FLEET_AGENT_START_MS, 90_000),
 		idleGraceMs: parsePositive(env.PI_FLEET_IDLE_GRACE_MS, 120_000),
 		gitGuard: (env.PI_FLEET_GIT_GUARD || "on").toLowerCase() !== "off",
 		autoContinue: (env.PI_FLEET_AUTO_CONTINUE || "on").toLowerCase() !== "off",
-		codexBin: env.PI_FLEET_CODEX_BIN || "codex",
-		claudeBin: env.PI_FLEET_CLAUDE_BIN || "claude",
 		herdrBin: env.PI_FLEET_HERDR_BIN || "herdr",
 	};
 }

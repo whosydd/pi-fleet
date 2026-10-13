@@ -14,7 +14,8 @@ Four tools do the mechanical work: `FleetDispatch`, `FleetHarvest`,
 ## Division of labour
 
 You do not write the ticket's code. You do not run its tests. The executor does
-that in its own worktree, with its own tools and its own account.
+that in its own worktree, with its own tools and its own account. An executor is
+one agent running one job; its harness is the CLI it runs as, Codex or Claude.
 
 You own four things: what to dispatch, whether the contract passes, the ticket's
 `Status:` line, and the commit. The executor never commits: you stage its

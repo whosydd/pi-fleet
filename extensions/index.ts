@@ -9,25 +9,27 @@
  *   - The executor implements or reviews exactly one ticket, in its own
  *     worktree, in its own Herdr pane, with its own tools and its own spend.
  *   - This extension owns the mechanical protocol: the ticket claim, the run
- *     directory, the pane, the task text, and the contract check. A zero exit
- *     with a broken contract is `contract_failed`, never a quiet completion.
+ *     directory, the pane, the task, and the contract check. A zero exit with a
+ *     broken contract is `contract_failed`, never a quiet completion.
  *
- * The two skill sets ship in this package and are split on purpose. `planning`
- * is declared in the package manifest, so pi loads it. `execution` is not
- * declared, so pi never sees it; the extension hands an executor its absolute
- * path. A harness that can load `implement` will implement instead of
+ * No upstream skill ships in this package, and the two sets stay split. The
+ * planning set is installed into the project from upstream by
+ * `/matt-pocock-skills-bootstrap`, so the orchestrator may load it. The execution
+ * set comes from the executor's own harness and is named in the task, never
+ * pointed at: a session that can load `implement` will implement instead of
  * dispatching, so the boundary is enforced by what is loadable rather than by a
  * request to behave.
  *
  * Configuration (environment, read once at load):
  *   PI_FLEET_RUNS_DIR        run-directory root (default: .pi/fleet/runs, made absolute)
  *   PI_FLEET_MAX_FIX_ROUND   fix rounds before the dispatch is refused (default: 2)
- *   PI_FLEET_AGENT_START_MS  how long Herdr waits for an executor TUI (default: 90000)
  *   PI_FLEET_IDLE_GRACE_MS   idle-without-contract grace before failure (default: 120000)
  *   PI_FLEET_GIT_GUARD       on (default) | off — block git stash, commit --amend, force push
- *   PI_FLEET_CODEX_BIN       codex binary (default: codex)
- *   PI_FLEET_CLAUDE_BIN      claude binary (default: claude)
  *   PI_FLEET_HERDR_BIN       herdr binary (default: herdr)
+ *
+ * The executor's binary is not configurable: Herdr starts it from the agent's
+ * kind, so this package never runs `codex` or `claude` itself. Herdr's wait for
+ * the executor's TUI is fixed in herdr.ts, because pi's own deadline wraps it.
  */
 
 import { execFile } from "node:child_process";
@@ -52,7 +54,9 @@ const DISPATCH_DESCRIPTION = `Hand one ticket to one executor and get a job id b
 
 An implement job leaves its changes uncommitted. The review job reads that working tree, and you commit only after the review passes.
 
-What the tool does for you: claims the ticket (rewrites its Status line to "claimed"), creates the run directory, writes the brief and the JSON schema, opens the ticket's Herdr tab in the worktree's own workspace, re-prompts the executor that built the ticket when the job is a fix round, starts the executor's own TUI, and delivers the task. When Herdr has closed that workspace — it closes an empty worktree workspace with the last tab cleanup closes — the tool reopens it instead of running the executor in the orchestrator's workspace. What it will not do: create the worktree, pick the executor's tools, set its permissions, or pay its bill.
+An executor is one agent running one job, in its own pane. A harness is the CLI product that executor runs as, Codex or Claude, together with the skill set that executor has.
+
+What the tool does for you: claims the ticket (rewrites its Status line to "claimed"), creates the run directory, writes the brief file and the JSON schema, opens the ticket's Herdr tab in the worktree's own workspace, re-prompts the executor that built the ticket when the job is a fix round, starts the executor's own TUI, and delivers the task. When Herdr has closed that workspace — it closes an empty worktree workspace with the last tab cleanup closes — the tool reopens it instead of running the executor in the orchestrator's workspace. What it will not do: create the worktree, pick the executor's tools, set its permissions, or pay its bill.
 
 The brief is what the executor sees — it never sees this conversation. Copy the ticket's text in; the ticket file itself stays out of the worktree.
 
@@ -72,13 +76,13 @@ Harvesting the same settled job twice is safe: the first harvest reports the job
 
 An executor's exit is not evidence. Herdr's idle and done mean "ready for input", not "finished" — a live run was idle mid-task and committed minutes later — so this tool only settles a job on the contract file, and on idleness that persists without one.`;
 
-const STATUS_DESCRIPTION = `List the fleet jobs on disk: id, ticket, role, executor, state, fix round, and which pane tabs are still open. Jobs from earlier sessions appear here, because every job is read from its run directory rather than from this session's memory.
+const STATUS_DESCRIPTION = `List the fleet jobs on disk: id, ticket, role, executor, state, fix round, and which tabs are still open. Jobs from earlier sessions appear here, because every job is read from its run directory rather than from this session's memory.
 
 It does not compute a frontier. The tracker's own convention defines one: an issue file under \`.scratch/<feature>/issues/\` that is neither claimed nor done, with every ticket in its "Blocked by" line done, lowest number first. Read the files and pick; this tool only tells you what is already in flight.`;
 
 const CLEANUP_DESCRIPTION = `Close the Herdr tabs that fleet jobs created, once those jobs have settled.
 
-What it closes: only tabs this package created, and only when every job in them has been harvested. Never the worktree, never a pane you opened yourself. A tab holding an unsettled job is reported as blocked.
+What it closes: only the tabs this package created, and only when every job in them has been harvested. It never removes a worktree, and never closes a tab it did not create. A tab holding an unsettled job is reported as blocked.
 
 Closing the last tab of a worktree's workspace lets Herdr close that empty workspace too. That is expected: the next dispatch reopens it. The worktree and its files stay untouched either way.
 
@@ -325,7 +329,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			});
 			if (!outcome.ok) {
 				// A claimed ticket with no job would be invisible to the next scan of the
-				// frontier and unbuildable by hand, so a failed dispatch releases it.
+				// frontier and unbuildable by hand, so a failed dispatch gives the claim back.
 				releaseClaim(ticketPath);
 				return textResult(`dispatch failed, ticket ${ticket.id} released: ${outcome.error}`, { status: "rejected" });
 			}
@@ -435,7 +439,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 			const head =
 				jobs.length === 0
 					? `No fleet jobs under ${settings.runsDir}. The frontier of ready tickets lives in the tracker's own files, not here.`
-					: `${jobs.length} job(s) on disk${openTabs.length > 0 ? `, ${openTabs.length} pane tab(s) still open` : ""}:\n${jobs.map(jobLine).join("\n")}`;
+					: `${jobs.length} job(s) on disk${openTabs.length > 0 ? `, ${openTabs.length} tab(s) still open` : ""}:\n${jobs.map(jobLine).join("\n")}`;
 			// Leftovers are named rather than hidden: a record from an earlier release,
 			// or a dispatch that did not finish. A run directory that is not a readable
 			// job is not counted, not harvested, and not closed, but the user still
@@ -455,7 +459,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 		name: "FleetCleanup",
 		label: "Fleet Cleanup",
 		description: CLEANUP_DESCRIPTION,
-		promptSnippet: "Close settled fleet job pane tabs once the run is fully read",
+		promptSnippet: "Close the tabs settled fleet jobs opened, once the run is fully read",
 		promptGuidelines: ["Close tabs after the last harvest of a run, not before: the pane is where the human reads the executor's output and checks the file changes."],
 		parameters: Type.Object({
 			job_id: Type.Optional(Type.String({ description: "Close one settled job's tab." })),
@@ -524,7 +528,7 @@ export default function fleetExtension(pi: ExtensionAPI) {
 	 * would leave the model to find the script.
 	 */
 	pi.registerCommand("matt-pocock-skills-bootstrap", {
-		description: "Install the upstream planning skills into this project, filtered, without touching global settings",
+		description: "Install the ten planning skills from github.com/mattpocock/skills into this project, and keep the executor-only skills (tdd, code-review) out of this session, so the orchestrator cannot implement instead of dispatching. It writes one entry in this project's .pi/settings.json; global settings stay untouched",
 		handler: async (_args, ctx) => {
 			const run = async (extra: string[]) => {
 				try {

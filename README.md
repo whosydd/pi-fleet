@@ -6,6 +6,10 @@ contract that comes back. A settled job wakes pi by itself, so the hand-off from
 build to review needs no prompting. When the review passes, pi merges the branch
 into the main checkout and removes the worktree.
 
+An executor is one agent running one job; a harness is the CLI product it runs
+as. The words this file uses for the sides of the loop, the artefacts and the
+states are defined in [GLOSSARY.md](./GLOSSARY.md).
+
 ## Install
 
 ```bash
@@ -15,14 +19,16 @@ pi install git:github.com/whosydd/pi-fleet
 Then, in each project you want to use it in, these four steps are the whole setup.
 Steps 1 and 2 are the bootstrap; steps 3 and 4 are the repository's own choices.
 
-1. `/matt-pocock-skills-bootstrap` — installs the upstream planning skills into
-   this project, filtered. It is the only step that touches a file.
+1. `/matt-pocock-skills-bootstrap` — installs the ten planning skills from
+   github.com/mattpocock/skills (called **upstream** below) into this project, and
+   keeps the executor-only skills (`tdd`, `code-review`) out of this session. It is
+   the only step that touches a file.
 2. `/reload` — pi read this project's settings at startup, so the new skills appear
    after a reload and not before.
 3. `setup-matt-pocock-skills` — the upstream skill that picks the issue tracker,
    writes `docs/agents/*.md`, and creates the triage labels. Step 1 is what makes
-   it loadable. Choose **Local markdown**: that is the medium this release reads
-   (see [The ticket tracker](#the-ticket-tracker)).
+   it loadable. Choose **Local markdown**: that is the only medium this release
+   reads (see [The ticket tracker](#the-ticket-tracker)).
 4. `herdr worktree create` — every job runs in its own worktree, and Herdr gives
    that worktree its own workspace.
 
@@ -33,10 +39,12 @@ Requires pi `>= 1.0.0`, the `codex` and/or `claude` CLI on PATH, and Herdr.
 This package ships **one** skill: its own orchestration loop. The upstream
 engineering skills are neither vendored nor copied.
 
-| set | who uses it | where it comes from |
+The two upstream sets are named for who may load them, not for what they do:
+
+| set | who may load it | where it comes from |
 | --- | --- | --- |
-| **planning** — grilling, to-spec, to-tickets, triage, domain-modeling, tracker setup | pi | `/matt-pocock-skills-bootstrap` installs the upstream repository into the project behind a settings filter, so these **track upstream** |
-| **execution** — tdd, code-review | the executors | the executor's own harness install. Both Codex and Claude already have these. The task text names them |
+| **planning** — the ten the orchestrator may load: grilling, to-spec, to-tickets, triage, domain-modeling, tracker setup | pi | `/matt-pocock-skills-bootstrap` installs the upstream repository into the project behind a settings filter, so these **track upstream** |
+| **execution** — the two only an executor loads: tdd, code-review | the executors | the executor's own harness install. Both Codex and Claude already have these. The task names them |
 | **fleet** | pi | this package |
 
 ### Why the execution set is not shipped
@@ -51,7 +59,7 @@ determinism, and it did the opposite:
   Codex's ships 1.3.1, and the review skill differs between them.
 - The methods worth guaranteeing are small and belong to this package anyway: the
   two axes, the anti-recursion guard, and the output shape. Those travel in the
-  task text, as text, where they cannot be shadowed.
+  task, as text, where they cannot be shadowed.
 
 The upstream `implement` skill is not named at all. Five of its six instructions
 are covered here more reliably — the brief carries the ticket, the task says to
@@ -112,8 +120,9 @@ fleet's run directories, and `FleetDispatch` adds both to the project's
 
 ## What an executor is told
 
-Every job gets one task text and one brief file, and nothing else. The task
-carries the rules that a mistake would cost a worktree to learn:
+Every job gets one task and one brief, and nothing else. The task is the single
+message sent into the pane; the brief is the file it tells the executor to read.
+The task carries the rules that a mistake would cost a worktree to learn:
 
 - Do not commit: leave the change in the worktree. The orchestrator stages it, a
   second harness reviews it, and the orchestrator commits after the review
@@ -177,8 +186,8 @@ else's record.
 
 ### FleetStatus
 
-List the jobs on disk, including jobs from earlier sessions, with the pane tabs
-still open. Run directories this release cannot read are listed separately, with
+List the jobs on disk, including jobs from earlier sessions, with the tabs still
+open. Run directories this release cannot read are listed separately, with
 the reason: a record from another release, or a directory whose dispatch did not
 finish and never wrote its `meta.json`. A readable job is never counted as a
 leftover. This tool does not compute a frontier: the tracker's own convention
@@ -208,10 +217,10 @@ to the job.
 
 `skills/manifest.json` holds two lists of upstream names: the `planning` set,
 which `/matt-pocock-skills-bootstrap` installs into the project, and the
-`execution` set, which the task text names. The `excluded` map records the upstream skills this package
-deliberately does not use, and why. A `$`-prefixed key holds a shared
-explanation, and a `$`-prefixed value is a pointer to another key in that same
-map.
+`execution` set, which the task names. The `excluded` map records the upstream
+skills this package deliberately does not use, and why. A `$`-prefixed key holds
+a shared explanation, and a `$`-prefixed value is a pointer to another key in
+that same map.
 
 `pi update` is the only thing that moves the upstream clone, and it moves the
 clone to whatever `main` is. Upstream moves skills between buckets, so a planning
@@ -235,13 +244,15 @@ Read once at load.
 | --- | --- | --- |
 | `PI_FLEET_RUNS_DIR` | `.pi/fleet/runs` | Run-directory root, made absolute. pi's own state lives under pi's own project directory. |
 | `PI_FLEET_MAX_FIX_ROUND` | `2` | Fix rounds before a dispatch is refused. |
-| `PI_FLEET_AGENT_START_MS` | `90000` | How long Herdr waits for an executor TUI. |
 | `PI_FLEET_IDLE_GRACE_MS` | `120000` | Idle-without-contract grace before failure. |
 | `PI_FLEET_GIT_GUARD` | `on` | Block `git stash`, `commit --amend`, and force push in this session's bash calls. |
 | `PI_FLEET_AUTO_CONTINUE` | `on` | Watch dispatched jobs with `herdr agent wait` and wake the session with a user message when one settles. `off` makes the loop wait for the human. |
-| `PI_FLEET_CODEX_BIN` | `codex` | Codex binary. |
-| `PI_FLEET_CLAUDE_BIN` | `claude` | Claude binary. |
 | `PI_FLEET_HERDR_BIN` | `herdr` | Herdr binary. |
+
+The executor's own binary is not listed because it is not configurable: Herdr
+starts the agent from its kind, so this package never runs `codex` or `claude`
+itself. Herdr's wait for the executor's TUI is fixed in `herdr.ts`, because pi's
+own deadline wraps it.
 
 ## Development
 
