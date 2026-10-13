@@ -1,7 +1,8 @@
 # Spec: GitHub Issues as the ticket tracker
 
-**Status:** draft. The open questions at the bottom need a human answer before any
-ticket is cut.
+**Status:** decided. Every design question has an answer below, and the candidate tickets at
+the bottom can be cut. "Not in this release" records the two things this release refuses
+on purpose.
 
 **Scope:** the tracker medium only. Where a ticket's text comes from, where its status
 lives, how a claim is written, how blocking edges are read, how the frontier is computed,
@@ -15,11 +16,15 @@ not change, because none of them reads the tracker.
 | Question | Decision |
 | --- | --- |
 | How the claim is made atomic | A claim comment; the lowest claim-comment id wins. Section 3. |
-| What picks the medium | `PI_FLEET_TRACKER`, values `markdown` or `github`, defaulting to `markdown`. No key in `.pi/settings.json`. Section 5. |
+| What picks the medium | The H1 of `docs/agents/issue-tracker.md`, the file the upstream setup skill writes. No environment variable, and no key in `.pi/settings.json`. Section 5. |
+| What counts as a ticket | An open item labelled `ready-for-agent` whose text carries "What to build". That is what excludes the spec issue, which is the parent of a version's tickets. Section 2. |
+| Who creates the `claimed` label | The fleet, at session start, because the upstream skill does not know that label. The four triage labels stay the human's. Section 6. |
 | What `done` means | The issue is closed. No `done` label. Section 2. |
-| Where a blocking edge is written | A `**Blocked by:**` line in the body. GitHub's own dependency field is not read. Section 4. |
+| Where a blocking edge is written | GitHub's native dependency field, `blockedBy`. The body line is not read on this medium, and a body line with no native edge is reported as inconsistent. Section 4. |
+| What the frontier order is | One version plan at a time: the lowest-numbered parent group first, the lowest-numbered ready ticket inside it. Section 4. |
 
-Two questions remain open. They are at the bottom.
+Every decision this release needs is in that table. "Not in this release" at the bottom
+records what is refused on purpose, and why.
 
 ## What does not change
 
@@ -58,10 +63,37 @@ job commits. When that remote is missing or ambiguous, the dispatch is refused a
 refusal asks for the `owner/repo#N` form. Do not guess from `process.cwd()`: the
 orchestrator's checkout and the worktree can point at different repositories.
 
-The spec stays a file: `.scratch/<feature>/spec.md`. Only tickets move. A spec is long,
-the fleet never reads it, and an issue body is a poor place for it.
+The spec lives where the tracker doc says it lives. On the local medium that is
+`.scratch/<feature>/spec.md`; on GitHub it is an issue, because the upstream `to-spec` skill
+publishes it there. The fleet only ever reads tickets, and the spec issue is excluded by the
+predicate in section 2.
 
 ## 2. Status lives in labels, not in a `Status:` line
+
+### What counts as a ticket
+
+```
+open, labelled ready-for-agent, text contains "What to build", no open blocker
+```
+
+The text marker is the load-bearing part, because the label is not. The upstream `to-spec`
+skill publishes the spec **as an issue labelled `ready-for-agent`**, and `to-tickets` then
+publishes the tickets as that issue's children while instructing the model *not* to close or
+modify the parent. Nothing upstream ever removes `ready-for-agent` from the spec.
+
+So the spec issue looks dispatchable for its whole life: before the split, when it has no
+children yet, and again after its last child closes. Three rules follow.
+
+- **The ticket predicate is the body marker.** `to-tickets` gives the tickets of both media
+a "What to build" section (`**What to build:**` locally, `## What to build` on GitHub), and
+the `to-spec` template has no such section. A leaf that lacks it is a plan, not a ticket.
+- **`subIssues` and `parent` are a second signal, never the only one.** They are verified to
+be dimensions of `gh issue view --json`. An unsplit spec has no children, so children alone
+cannot carry the rule.
+- **The fleet never closes and never modifies a parent issue.** When a version's last ticket
+merges, its spec stays open. Closing the plan belongs to the human, at release time.
+
+### The status table
 
 | Current string | GitHub |
 | --- | --- |
@@ -123,72 +155,132 @@ template is not wrong for what it was written for: the planning skills claim a t
 by hand, in one session. The fleet claims one in code, and two panes can race. The written
 `docs/agents/issue-tracker.md` must say which claim the fleet uses.
 
-## 4. Blocking edges stay a line in the body
+## 4. Blocking edges are GitHub's native dependency field
 
-An edge is written the way it is written today:
+GitHub has one canonical representation for "this ticket waits on that one": the native
+dependency, read as `blockedBy`. This medium uses it, and only it.
 
-```
-**Blocked by:** #12, #15
-```
-
-The frontier is then:
+The frontier is one call:
 
 ```
-gh issue list --state open --label ready-for-agent --json number,title,body --limit 100
+gh issue list --state open --label ready-for-agent \
+  --json number,title,body,labels,state,subIssues,blockedBy,parent --limit 100
 ```
 
-Keep the issues whose body names no open blocker, sort by number ascending, and take the
-first.
+That the field is reachable at all corrects this spec's earlier draft, which claimed the
+native dependency needed GraphQL. It does not, and this was measured on `gh` 2.102, not
+read:
 
-GitHub's own dependency field (`blocked by` / `blocking`) is not used. It is reachable
-through GraphQL rather than the CLI's `--json` fields, and its shape can move. See open
-question 4.
-
-A task list (`- [ ] #12`) is not an edge. A checklist is a human's progress note; an edge
-is a fact about dispatch order, and the two diverge the moment someone ticks a box early.
-
-The upstream template prefers GitHub's native dependency field and keeps this line as a
-fallback. This spec takes the fallback as the only form, for the reason in open question 4
-of the earlier draft: the native field is reachable through GraphQL rather than the CLI's
-`--json` fields. The template's own paragraph on it needs the database id
-(`gh api repos/<owner>/<repo>/issues/<n> --jq .id`) rather than the number, which is a
-second identifier to get wrong.
-
-`Blocked by:` with no numbers means unblocked. A blocker that names a number which is not
-an issue in the repository is treated as not done, and the frontier silently skips that
-ticket — so the frontier report must name skipped tickets and the numbers they wait on.
-That is a small addition to `FleetDispatch`'s or the skill's report, not to the tool's
-refusals.
-
-## 5. The medium is the `PI_FLEET_TRACKER` environment variable
-
-`PI_FLEET_TRACKER`, whose value is `markdown` or `github`, read where the other `PI_FLEET_*`
-settings are read, defaulting to `markdown`. A value that is neither is refused, and the
-refusal names both accepted values.
-
-```ts
-// extensions/lib/types.ts
-env.PI_FLEET_TRACKER === "github" ? "github" : "markdown"
+```
+$ gh issue view 1 --json bogus
+Available fields: assignees author blockedBy blocking body closed closedAt
+  closedByPullRequestsReferences comments createdAt id isPinned issueType labels
+  milestone number parent projectCards projectItems reactionGroups state stateReason
+  subIssues subIssuesSummary title updatedAt url
+$ gh issue list --limit 5 --json number,title,body,labels,state,subIssues,blockedBy,parent
+exit=0
 ```
 
-A rejected option, for the record. A `pi-fleet.tracker` key in the project's
-`.pi/settings.json` reads better on paper: the medium is a property of the repository, and
-an environment variable is a property of the shell that started pi. Two facts killed it.
+A ticket is blocked when `blockedBy` names an issue that is not closed.
 
-- **pi reads project settings only when the project path is trusted**, and returns `{}`
-  when it is not (`dist/core/settings-manager.js`, `loadFromStorage`). So the fleet would
-  read its medium from a file that vanishes in a worktree, on a fresh clone, and before any
-  trust prompt, and would silently fall back to `markdown`. Reading the file with
-  `readFileSync` would dodge that, and adds a second settings surface with its own
-  precedence, its own parsing, and its own failure mode.
-- **pi's settings file is pi's.** The key survives a pi rewrite — verified, pi merges its
-  modified fields into the file's current content (`persistScopedSettings`) — but that is
-  tolerance, not a contract. This package does not own that file and does not write to it.
+### Normalisation: one representation, and a report when another appears
 
-What the environment variable costs: the medium is not visible in the repository, so a
-clone does not arrive knowing it, and one machine running two projects on different media
-needs the variable set per shell rather than once. The README records the variable next to
-the other `PI_FLEET_*` settings, which is where a reader already looks.
+Upstream's `to-tickets` writes the native edge first on a real tracker and keeps a
+`Blocked by:` text line as the fallback, and its issue template says to omit that section
+when the edges were set natively. So the normal shape of a GitHub ticket is a native edge
+and no text line at all.
+
+A `Blocked by:` line that names issue references while `blockedBy` is empty is therefore an
+inconsistency, not a second form of the same fact. The fleet does not dispatch that ticket,
+and the frontier report names it and the references it could not read. "None (can start
+immediately)" names no reference, so it is not an inconsistency and the ticket is unblocked.
+
+Two consequences for the written tracker doc: it states that edges are set natively, and it
+states that the fleet reads the native field only.
+
+The text line is still the markdown medium's one form, and its parser does not change. It is
+never consulted for a GitHub ticket.
+
+### The order: one version plan at a time
+
+The survivors are grouped by the version plan they belong to, and the fleet finishes one
+group before it starts the next:
+
+- a ticket's group is the issue its `parent` names;
+- a ticket with no parent is its own group;
+- a group's key is its parent's number, or the ticket's own number when it has no parent;
+- groups are worked in ascending key order, and inside a group the lowest-numbered ready
+  ticket goes first.
+
+The lowest-numbered open plan is finished before the next plan starts, and a standalone
+ticket competes with plans on its own number.
+
+A task list (`- [ ] #12`) is not an edge, and neither is an assignee. A checklist is a
+human's progress note; an edge is a fact about dispatch order, and the two diverge the
+moment someone ticks a box early.
+
+One shape to confirm at implementation time: whether each entry of `blockedBy` carries the
+blocker's own state. When it does not, resolving a blocker's state costs one `gh issue view`
+per blocker, which is affordable at a frontier of tens.
+
+A blocker numbering an issue that is not in the repository is treated as not closed, so the
+frontier skips that ticket.
+
+## 5. The medium is read from the tracker doc the setup skill writes
+
+`docs/agents/issue-tracker.md` is the repository's own declaration of where its issues live.
+The upstream `setup-matt-pocock-skills` skill writes it from one of four sources:
+
+| Skill choice | Template | H1 in the doc |
+| --- | --- | --- |
+| GitHub | `issue-tracker-github.md` | `# Issue tracker: GitHub` |
+| GitLab | `issue-tracker-gitlab.md` | `# Issue tracker: GitLab` |
+| Local markdown | `issue-tracker-local.md` | `# Issue tracker: Local Markdown` |
+| Other (Jira, Linear, …) | none, the model writes it from the human's description | unpredictable |
+
+The fleet reads the file, matches `^# Issue tracker: (.+)$`, and picks a medium:
+
+| Recognised | Medium | Behaviour |
+| --- | --- | --- |
+| file absent | markdown | Read `.scratch/`, and report that no tracker doc was found |
+| `GitHub` | github | Read issues |
+| `Local Markdown` | markdown | Read `.scratch/` |
+| `GitLab` | — | Refuse, and name the two media this release reads |
+| anything else | — | Refuse, and quote the H1 and the file path |
+
+The two refusals are the point of the table. An unrecognised doc must not fall back to
+markdown: a Jira or Linear repository would then get a permanently empty frontier and no
+diagnostic. This repository has paid for that class of failure once already, when a filter
+pattern that matched no file loaded no skill and said nothing.
+
+The file is read from the orchestrator's directory, where the claim happens. A copy on a
+ticket's branch is not the declaration this process follows.
+
+### Why GitLab is refused rather than supported
+
+The recogniser has to know all four options, because the skill can produce any of them.
+Implementing a medium is a separate question, and on the evidence GitLab fails it.
+
+- **The part the fleet depends on most is the part that varies by tier.** GitLab's native
+  blocking link is a Premium/Ultimate feature, and the documented fallback on the free tier
+  is the same `Blocked by:` text line. The edge reader would need two paths and a tier
+  check, where GitHub needs one field the frontier query already returns.
+- **One edge costs a second call with a second identifier.** GitLab's link is reached
+  through `glab api projects/:id/issues/<child-iid>/links`, so the project id and the
+  internal issue id both enter the code. GitHub's is `blockedBy` on the issue that was
+  already fetched.
+- **There is nothing here to verify it against.** `glab` is not installed on this machine,
+  and every remote is GitHub. The tests must not touch the network, so a `glab.ts` would be
+  written against a fake `glab` whose argv and JSON this package invented. An adapter that is
+  wrong fails at claim time — after the ticket is claimed and the pane is open. That is the
+  worst place to be wrong and the least visible one.
+- **The daily path is unaffected.** The claim CAS, the two labels, `done` as closed, the
+  ticket predicate and the recogniser are all medium-agnostic. A `glab.ts`, one more branch
+  in the recogniser and a fake-`glab` helper is the whole delta, and that ticket has one
+  precondition: a GitLab repository and an installed `glab` to check it against.
+
+Nothing changes on the markdown side. A repository whose doc is absent, or says Local
+Markdown, behaves exactly as it does today.
 
 ## 6. `gh` gets one module, and it is the only module that runs `gh`
 
@@ -213,37 +305,43 @@ names what is missing:
 
 - `gh` is not on `PATH`.
 - `gh auth status` reports no account. Keep `gh`'s own reason.
-- The repo lacks the `ready-for-agent` or `claimed` label. Refuse with the
-  `gh label create` line that fixes it. See below.
+- The repo lacks the `ready-for-agent` label. Refuse with the `gh label create` line that
+  fixes it: that label is the human's triage vocabulary, and the upstream setup skill is
+  what creates it, with the human's confirmation. The fleet does not write it.
+- The repo lacks `claimed`. Refuse with its `gh label create` line as well. The session-start
+  reconcile below normally creates it first, so this refusal is the net for the case where
+  that reconcile did not run or did not succeed.
 
-### Why the package does not create the two labels
+### The one label the fleet creates
 
-`gh issue edit --add-label` fails outright on a label the repository does not have, so a
-missing label is a hard failure either way. The choice is only between refusing with the
-command and running the command.
+`claimed` is the fleet's own state. It is not one of the five triage roles, so the upstream
+setup skill does not know it and never creates it. The fleet creates it, once, and only
+when all three of these hold:
 
-Refusing is the default, for three reasons:
+- the recogniser of section 5 says the medium is GitHub;
+- `gh label list` does not carry `claimed`;
+- the session is starting.
 
-- **A label is shared vocabulary, and the issue tracker's document already says the human
-  owns it.** `docs/agents/triage-labels.md` exists so that the strings in the package and
-  the strings in the tracker can be reconciled by hand. Creating labels from code moves
-  that decision into a tool call and hides it.
-- **The package writes to the tracker, and it should not write to the tracker's schema.**
-  The two labels are the only states the package owns. Colors, descriptions and every other
-  label are not its business, and a partial create leaves half a vocabulary behind.
-- **The package already has exactly one unrequested project mutation**, the `.gitignore`
-  line in `preflight.ts`, and it earns that place by preventing a real defect: the fleet's
-  own run directories appeared as the ticket's untracked work, and one live run committed
-  them. A missing label produces a one-line refusal, not a wrong change in the repository.
+The trigger is the state and not the setup skill's completion, because there is no
+completion event to hook in pi: an extension sees `session_start`, `tool_call`,
+`tool_result`, `user_bash` and the turn events, and no skill event exists. The state is also
+the better trigger. A fresh clone whose tracker doc already says GitHub never runs the setup
+skill, and a completion hook would miss it.
 
-The cost is one command at switch time, for a human who switches once per project:
+A failure here is reported and not retried: the dispatch-time refusal above is the net, and
+a label that is missing at claim time produces one readable line rather than a silent wrong
+write.
+
+This is a write to the tracker's schema, and the package makes it on purpose. The boundary
+that keeps it honest is ownership: the fleet creates exactly the label it writes, and it
+never creates, edits, or deletes a triage label.
+
+The four triage labels remain the human's, and this block still belongs in the refusal for
+`ready-for-agent`:
 
 ```
 gh label create ready-for-agent --description "Fully specified, ready for an AFK agent"
-gh label create claimed --description "A fleet job holds this ticket"
 ```
-
-The refusal prints that block.
 
 ## 7. Refusal text
 
@@ -251,8 +349,8 @@ Every `gh` failure is abbreviated the way `runner.ts` abbreviates Herdr argv: an
 longer than 80 characters becomes a placeholder that says how long it was. An issue body
 in a refusal is the same defect as the 60-line brief that `runner.ts` used to echo.
 
-A refusal states: the medium (GitHub issues), the ticket reference in canonical form, and
-`gh`'s own reason. It never contains the issue body.
+A refusal states: the medium it resolved and the file it read it from, the ticket reference
+in canonical form, and `gh`'s own reason. It never contains the issue body.
 
 ## 8. Edge cases
 
@@ -284,48 +382,57 @@ All of these run against the fake `gh`, and none touches the network.
 - A bare number with no `origin` remote is refused.
 - Refusal text for an issue body of 4 KB stays under 1000 characters and contains no line
   of the body.
-- An absent `PI_FLEET_TRACKER` reads `markdown`; an unknown value is refused with both
-  accepted values.
+- The recogniser: `GitHub` gives github, `Local Markdown` gives markdown, an absent file
+  gives markdown, and `GitLab` plus an unrecognised H1 are refused with the file path in the
+  message.
+- A spec issue labelled `ready-for-agent` is not picked. A leaf whose text lacks
+  "What to build" is skipped, and so is one that has children.
+- A ticket blocked only by a native `blockedBy` edge is skipped, and the blocker's number is
+  reported.
+- A ticket whose body names `Blocked by: #12` while `blockedBy` is empty is not dispatched,
+  and the report names it and `#12`. A body reading "None (can start immediately)" is
+  dispatched.
+- Grouping: plan #7 holds ready tickets #9 and #10, and standalone ticket #8 is also ready.
+  The groups are keyed 7 and 8, so plan #7's ticket #9 is picked first. Swap the numbers and
+  the standalone ticket wins.
 
-## Still open
+## Not in this release
 
-1. **Should the bootstrap command create the `claimed` label?** The upstream setup skill
-   creates each missing triage label, `ready-for-agent` among them, and `claimed` is not one
-   of the five triage roles. Section 6 refuses and prints the `gh label create` block
-   instead. The whole argument against creating it is there, so this is a one-line answer
-   for the human: yes creates it once per project, no keeps the refusal.
-
-Settled but worth restating: GitHub's native dependency field is not read now. Section 4
-says why, and the `**Blocked by:**` line keeps the two media identical, which is what makes
-this spec small.
+- **GitLab.** The recogniser refuses it, on the evidence in section 5. A `glab.ts` sibling is
+  the known path, and its precondition is a GitLab repository and an installed `glab` to
+  check it against.
+- **Creating the four triage labels.** Those are the human's vocabulary, and the upstream
+  setup skill creates them with the human's confirmation. The fleet creates only `claimed`,
+  the one label that skill does not know, and it does so on the state rather than on the
+  skill's completion: a fresh clone whose doc already says GitHub is covered too.
 
 ## Candidate tickets
 
-Not opened yet. 01 and 02 depend on neither open question, so they can be cut now.
+Not opened yet. Nothing here waits on a decision, so the order below is the dependency order.
 
 | # | Ticket | Blocked by |
 | --- | --- | --- |
 | 01 | `gh.ts`: argv, parsing, preconditions, fake-gh test helper | — |
-| 02 | `tracker.ts`: the frontier, the claim and the release, against the fake `gh` | 01 |
+| 02 | `tracker.ts`: the recogniser, the ticket predicate, the frontier, the claim and the release, against the fake `gh` | 01 |
 | 03 | `FleetDispatch` accepts the three reference forms and records `meta.ticketRef` | 01 |
 | 04 | Close a ticket and record the outcome; `done` is the closed state | 03 |
 | 05 | The skill, `docs/agents/issue-tracker.md` and `AGENTS.md` describe the new medium | 03 |
+| 06 | Session-start reconcile: create `claimed` when the doc says GitHub and the label is missing | 01 |
 
 Ticket 05 is larger than it looks. `docs/agents/issue-tracker.md` is not this package's
 file: it is written by the upstream `setup-matt-pocock-skills` skill, and this repository's
 copy is byte-identical to that skill's `issue-tracker-local.md` template. Two things follow.
 
 - The fleet skill's step 2 tells the operator to choose **Local markdown** when they run
-  that skill. It must choose **GitHub** instead, and the fleet skill must say so. The flip
-  has to happen at the same moment `PI_FLEET_TRACKER` moves, because the planning skills
-  read that doc to decide whether to write a `.scratch/` file or call `gh issue create`.
-  Move one and not the other, and the planner writes markdown while the fleet reads issues.
+  that skill. It must choose **GitHub** instead, and the fleet skill must say so. That choice
+  is also the whole of the medium switch, now that section 5 reads the doc: the H1 is the
+  setting, so there is no second thing to keep in step.
 - The generated doc needs the fleet's corrections on top of the template: the claim is the
-  comment CAS of section 3, not `--add-assignee`; `done` is the closed state; the two
-  labels the fleet owns are `ready-for-agent` and `claimed`; and the edge is the
-  `**Blocked by:**` body line of section 4.
+  comment CAS of section 3, not `--add-assignee`; `done` is the closed state; `claimed` is
+  the fleet's label; and a blocking edge is set natively, because the fleet reads `blockedBy`
+  and never the body line.
 
 That skill's Section B creates each triage label the tracker lacks, `ready-for-agent`
 among them, at setup time and with the human's confirmation. It does not create `claimed`,
-because `claimed` is not one of the five triage roles. The refusal in section 6 stays as
-the net for a repository where nobody has created `claimed` yet.
+because `claimed` is not one of the five triage roles. Ticket 06 creates that one, and the
+refusal in section 6 stays as the net for a repository where neither has run yet.
